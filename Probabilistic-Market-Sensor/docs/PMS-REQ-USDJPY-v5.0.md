@@ -140,6 +140,7 @@ USD/JPYの市場データおよびマクロイベント情報から、10分先�
 #### 欠損補完
 
 - 欠損定義：隣接timestampの差分が timeframe_sec を超える箇所を欠損とみなす
+- 取引休止時間帯（市場クローズ）は欠損判定から除外する（具体的な時間帯はデータ取得・保存規約に記載）
 - 最大連続3本まで補完可：前値closeでOHLC埋め、volume=0
   - 補完が発生した場合は risk_flags.data_integrity_warning=true、risk_flags.degraded=true
   - degraded_reasons に ohlcv_gap_filled を追加

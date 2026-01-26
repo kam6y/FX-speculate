@@ -22,7 +22,7 @@
 
 ## 4. 欠損補完ロジック実装
 - 目的: 欠損条件の埋めとrisk_flagsの付与
-- 作業: 欠損定義（timestamp gap>timeframe_sec）、最大連続60本、補完は前値close埋め/volume=0、risk_flags.data_integrity_warning=true／risk_flags.degraded=true の付与、degraded_reasons管理（ohlcv_gap_filled/ohlcv_gap_too_long/volume_missing）。volume欠損（取得不可で0の場合）はギャップ有無に関わらず volume_missing を追加し、data_integrity_warning/degraded を立てる。欠損補完はバリデーションでtimestamp単調性が確認できた後に適用し、補完後の系列で特徴量/ラベル生成を行う。補完で系列長が lookback_bars を超えた場合は先頭側を切り詰め、末尾は asof に整合させる
+- 作業: 欠損定義（timestamp gap>timeframe_sec、取引休止時間帯は欠損判定から除外）、最大連続60本、補完は前値close埋め/volume=0、risk_flags.data_integrity_warning=true／risk_flags.degraded=true の付与、degraded_reasons管理（ohlcv_gap_filled/ohlcv_gap_too_long/volume_missing）。volume欠損（取得不可で0の場合）はギャップ有無に関わらず volume_missing を追加し、data_integrity_warning/degraded を立てる。欠損補完はバリデーションでtimestamp単調性が確認できた後に適用し、補完後の系列で特徴量/ラベル生成を行う。補完で系列長が lookback_bars を超えた場合は先頭側を切り詰め、末尾は asof に整合させる
 - 成果物: 欠損補完モジュール
 - 完了条件: 61本以上連続は422、1-3本/4-60本で理由分岐、補完後はlookback_bars本に整形
 
