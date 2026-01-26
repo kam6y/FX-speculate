@@ -10,10 +10,22 @@ USDJPYの1分足OHLCVとマクロイベントを、再現可能かつ最小構�
 
 ## 3. 未決事項（要確認）
 以下はPMS-REQ-USDJPY-v5.0に記載がないため、運用前に確定が必要。
-- OHLCVデータ提供元（ベンダー/API、ライセンス、レート制限）
 - マクロイベント提供元と、OpenAPIに記載するevent_typeの列挙リスト
 - 更新方式（バッチ or インクリメンタル）と保持ポリシー（raw/curated）
 - リポジトリ外の保存先ルール（ローカル or オブジェクトストレージ等）
+
+## 3.1 決定事項（運用方針）
+- 価格種別は mid（BID/ASK平均）を採用する
+
+### 3.2 GMOコインFX 公開API（OHLCV）
+- Base URL: https://forex-api.coin.z.com/public
+- KLine: GET /v1/klines
+  - params: symbol=USD_JPY, priceType={BID|ASK}, interval=1min, date=YYYYMMDD
+  - dateはJST基準（APIの更新はJST 06:00）
+  - openTime（Unix ms）、open/high/low/close が返る（volumeは提供されない）
+- レート制限: GET 6回/秒
+- volumeは取得できないため、OHLCVの volume は 0.0 で保存する
+- midはBID/ASKの各OHLCを平均して作成する（open/high/low/closeの各値）
 
 ## 4. 正規化ルール（固定）
 - timezone: UTC固定
@@ -83,6 +95,15 @@ USDJPYの1分足OHLCVとマクロイベントを、再現可能かつ最小構�
 ```bash
 python scripts/ingest_usdjpy.py ohlcv --input raw_ohlcv.csv --format csv --output-dir data/curated/ohlcv --source VendorA
 python scripts/ingest_usdjpy.py macro --input raw_macro.jsonl --format jsonl --output-dir data/curated/macro_events --source VendorB
+```
+
+### 7.2 GMOコインFX 取得スクリプト（OHLC）
+- scripts/fetch_gmo_fx_klines.py
+- 取得→正規化済み JSONL/manifest を直接出力する
+
+使用例（実行はしない）:
+```bash
+python scripts/fetch_gmo_fx_klines.py --start-date 2025-10-01 --end-date 2025-12-31 --price-type MID --output-dir data/curated/ohlcv
 ```
 
 ## 8. 最低保存要件
