@@ -32,3 +32,13 @@ from .features import (  # noqa: F401
     build_feature_names,
     generate_feature_vector,
 )
+from .labels import (  # noqa: F401
+    ATR_WINDOW,
+    BARRIER_MULTIPLIER,
+    HORIZONS,
+    BarrierConfig,
+    Label,
+    LabelError,
+    LabelResult,
+    generate_labels,
+)
