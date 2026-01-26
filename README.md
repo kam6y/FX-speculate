@@ -22,17 +22,37 @@
 2) 実行・テスト手順を追加する場合は、WSL2 + Docker Desktop（Linux コンテナ）+ NVIDIA GPU の手順を明記する。
 3) ドライバ／CUDA／TensorRT の実際のバージョンは、スタック確定後に Runbook へ記録する。
 
+## WSL2/Docker コンテナ（開発・テスト）
+前提: Windows 11 + WSL2 + Docker Desktop（Linux コンテナ）。
+
+### 1) イメージ作成
+```bash
+docker compose build
+```
+
+### 2) コンテナでテスト実行
+```bash
+docker compose run --rm pms-dev python3 -m unittest discover -s Probabilistic-Market-Sensor/tests -p "test_*.py"
+```
+
+### 3) GPU 利用時（任意）
+GPU 用プロファイル（`gpus: all`）を有効化して起動する。
+```bash
+docker compose --profile gpu run --rm pms-dev-gpu bash
+```
+
 ## 現在の構成（作成済み）
 - `Probabilistic-Market-Sensor/docs/` 要件定義、WBS、データ取得・保存規約。
 - `Probabilistic-Market-Sensor/scripts/` データ取得スクリプト雛形。
 - `Probabilistic-Market-Sensor/src/` 入力スキーマ/バリデーションなどの実装コード。
 - `Probabilistic-Market-Sensor/tests/` 入力バリデーションのテストケース。
+- `Dockerfile` / `docker-compose.yml` / `.dockerignore` WSL2 + Docker Desktop 向けの開発・テスト用コンテナ。
 
 ## テスト（暫定）
 前提: WSL2 + Docker Desktop（Linux コンテナ）環境で Python を実行する。
 実行例（Linux コンテナ内）:
 ```bash
-python -m unittest discover -s Probabilistic-Market-Sensor/tests -p "test_*.py"
+python3 -m unittest discover -s Probabilistic-Market-Sensor/tests -p "test_*.py"
 ```
 
 ## リポジトリ構成案（今後追加予定）
