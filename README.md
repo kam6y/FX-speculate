@@ -25,9 +25,21 @@
 ## 現在の構成（作成済み）
 - `Probabilistic-Market-Sensor/docs/` 要件定義、WBS、データ取得・保存規約。
 - `Probabilistic-Market-Sensor/scripts/` データ取得スクリプト雛形。
+- `Probabilistic-Market-Sensor/src/` 入力スキーマ/バリデーションなどの実装コード。
+- `Probabilistic-Market-Sensor/tests/` 入力バリデーションのテストケース。
+
+## テスト（暫定）
+前提: WSL2 + Docker Desktop（Linux コンテナ）環境で Python を実行する。
+実行例（Linux コンテナ内）:
+```bash
+python -m unittest discover -s Probabilistic-Market-Sensor/tests -p "test_*.py"
+```
 
 ## リポジトリ構成案（今後追加予定）
 - `Probabilistic-Market-Sensor/runbook/` 運用手順と環境ノート。
 - `Probabilistic-Market-Sensor/specs/` OpenAPI とスキーマ関連成果物。
 - `Probabilistic-Market-Sensor/models/` 学習済みモデルと最適化済み推論成果物。
 - `Probabilistic-Market-Sensor/logs/` 評価およびレイテンシ計測ログ。
+
+
+
