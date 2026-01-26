@@ -7,6 +7,7 @@
 - 事実上のソースオブトゥルースは以下の2点です。
   - `Probabilistic-Market-Sensor/docs/PMS-REQ-USDJPY-v5.0.md`
   - `Probabilistic-Market-Sensor/docs/PMS-REQ-USDJPY-v5.0-WBS.md`
+- 開発ベースラインとリポジトリ構成案は `README.md` に記載しています。
 
 ## 進め方（エージェント向け）
 - 実装や設計の判断は必ず上記の要件定義書・WBSに合わせてください。
@@ -15,6 +16,8 @@
 - 現在はコードが無いため、
   提案や作業は「ドキュメント更新」または
   「初期実装の方針整理」が中心になります。
+- 開発環境の前提（WSL2 + Docker Desktop（Linuxコンテナ）+ NVIDIA GPU など）は
+  `README.md` の「開発ベースライン」に従ってください。
 
 ## 変更時のルール
 - 挙動や仕様を変える提案を行う場合は、
