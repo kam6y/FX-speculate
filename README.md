@@ -9,6 +9,7 @@
 
 ## 追加ドキュメント
 - `Probabilistic-Market-Sensor/docs/PMS-DATA-INGEST-USDJPY-v5.0.md` データ取得・保存規約
+- `Probabilistic-Market-Sensor/docs/PMS-FEATURE-DICT-USDJPY-v5.0.md` 特徴量辞書（v5.0準拠）
 
 ## 開発ベースライン（要件 v5.0 4.1）
 - GPU: NVIDIA GeForce RTX 5070 Ti（16GB GDDR7）を評価の最低ターゲットとする。
@@ -42,10 +43,10 @@ docker compose --profile gpu run --rm pms-dev-gpu bash
 ```
 
 ## 現在の構成（作成済み）
-- `Probabilistic-Market-Sensor/docs/` 要件定義、WBS、データ取得・保存規約。
+- `Probabilistic-Market-Sensor/docs/` 要件定義、WBS、データ取得・保存規約、特徴量辞書。
 - `Probabilistic-Market-Sensor/scripts/` データ取得スクリプト（`ingest_usdjpy.py` / `fetch_gmo_fx_klines.py`）。
-- `Probabilistic-Market-Sensor/src/` 入力スキーマ/バリデーション/欠損補完の実装コード。
-- `Probabilistic-Market-Sensor/tests/` 入力バリデーション/欠損補完のテストケース。
+- `Probabilistic-Market-Sensor/src/` 入力スキーマ/バリデーション/欠損補完/特徴量生成の実装コード。
+- `Probabilistic-Market-Sensor/tests/` 入力バリデーション/欠損補完/特徴量生成のテストケース。
 - `Dockerfile` / `docker-compose.yml` / `.dockerignore` WSL2 + Docker Desktop 向けの開発・テスト用コンテナ。
 - `.gitignore` キャッシュ/一時ファイルを除外するための Git 設定。
 

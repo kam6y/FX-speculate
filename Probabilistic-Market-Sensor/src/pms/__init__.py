@@ -21,3 +21,14 @@ from .imputation import (  # noqa: F401
     fill_ohlcv_gaps,
     is_market_closed,
 )
+from .features import (  # noqa: F401
+    DEFAULT_EVENT_DECAY_TAU_MINUTES,
+    DEFAULT_EVENT_LOOKAHEAD_MINUTES,
+    DEFAULT_EVENT_TIME_TO_NEXT_MAX_MINUTES,
+    DEFAULT_RV_WINDOW,
+    FeatureConfig,
+    FeatureError,
+    FeatureResult,
+    build_feature_names,
+    generate_feature_vector,
+)
