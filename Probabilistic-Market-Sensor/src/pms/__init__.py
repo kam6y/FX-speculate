@@ -15,3 +15,9 @@ from .validation import (  # noqa: F401
     ValidationResult,
     validate_infer_request,
 )
+from .imputation import (  # noqa: F401
+    MAX_CONTIGUOUS_GAP_BARS,
+    SHORT_GAP_MAX_BARS,
+    fill_ohlcv_gaps,
+    is_market_closed,
+)

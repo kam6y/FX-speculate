@@ -44,9 +44,10 @@ docker compose --profile gpu run --rm pms-dev-gpu bash
 ## 現在の構成（作成済み）
 - `Probabilistic-Market-Sensor/docs/` 要件定義、WBS、データ取得・保存規約。
 - `Probabilistic-Market-Sensor/scripts/` データ取得スクリプト（`ingest_usdjpy.py` / `fetch_gmo_fx_klines.py`）。
-- `Probabilistic-Market-Sensor/src/` 入力スキーマ/バリデーションなどの実装コード。
-- `Probabilistic-Market-Sensor/tests/` 入力バリデーションのテストケース。
+- `Probabilistic-Market-Sensor/src/` 入力スキーマ/バリデーション/欠損補完の実装コード。
+- `Probabilistic-Market-Sensor/tests/` 入力バリデーション/欠損補完のテストケース。
 - `Dockerfile` / `docker-compose.yml` / `.dockerignore` WSL2 + Docker Desktop 向けの開発・テスト用コンテナ。
+- `.gitignore` キャッシュ/一時ファイルを除外するための Git 設定。
 
 ## テスト（暫定）
 前提: WSL2 + Docker Desktop（Linux コンテナ）環境で Python を実行する。
