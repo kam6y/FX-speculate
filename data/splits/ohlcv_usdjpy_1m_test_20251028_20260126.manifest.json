@@ -1,0 +1,28 @@
+{
+  "dataset": "ohlcv_test",
+  "split": "test",
+  "file": "ohlcv_usdjpy_1m_test_20251028_20260126.jsonl",
+  "symbol": "USDJPY",
+  "timeframe_sec": 60,
+  "records": 88321,
+  "start_timestamp_utc": "2025-10-28T21:59:00Z",
+  "end_timestamp_utc": "2026-01-26T20:59:00Z",
+  "generated_at_utc": "2026-01-27T18:26:50Z",
+  "split_config": {
+    "max_horizon_bars": 60,
+    "min_test_days": 90,
+    "val_ratio": 0.15,
+    "purge_applied": true
+  },
+  "schema": {
+    "fields": [
+      "timestamp_utc",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume"
+    ],
+    "order": "oldest_to_newest"
+  }
+}

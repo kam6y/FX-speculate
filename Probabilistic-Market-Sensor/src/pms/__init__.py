@@ -42,3 +42,16 @@ from .labels import (  # noqa: F401
     LabelResult,
     generate_labels,
 )
+from .splitting import (  # noqa: F401
+    DEFAULT_VAL_RATIO,
+    MAX_HORIZON_BARS,
+    MIN_TEST_DAYS,
+    SplitBoundary,
+    SplitConfig,
+    SplitError,
+    SplitResult,
+    get_split_bars,
+    get_split_summary,
+    split_timeseries,
+    validate_split_for_similarity_search,
+)

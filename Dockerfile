@@ -15,4 +15,6 @@ WORKDIR /workspace
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+RUN pip3 install --no-cache-dir --break-system-packages pytest
+
 CMD ["bash"]
