@@ -47,6 +47,7 @@ docker compose --profile gpu run --rm pms-dev-gpu bash
 - `Probabilistic-Market-Sensor/scripts/` データ取得スクリプト（`ingest_usdjpy.py` / `fetch_gmo_fx_klines.py`）。
 - `Probabilistic-Market-Sensor/src/` 入力スキーマ/バリデーション/欠損補完/特徴量生成の実装コード。
 - `Probabilistic-Market-Sensor/tests/` 入力バリデーション/欠損補完/特徴量生成のテストケース。
+- `data/` 分割データやベースライン評価レポートの出力。
 - `Dockerfile` / `docker-compose.yml` / `.dockerignore` WSL2 + Docker Desktop 向けの開発・テスト用コンテナ。
 - `.gitignore` キャッシュ/一時ファイルを除外するための Git 設定。
 

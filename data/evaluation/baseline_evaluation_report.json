@@ -1,0 +1,326 @@
+{
+  "report_version": "1.2",
+  "generated_at": "2026-01-28T07:12:18Z",
+  "evaluation_step": 1,
+  "horizons": [
+    10,
+    30,
+    60
+  ],
+  "direction_evaluation": {
+    "10": {
+      "baseline_a": {
+        "balanced_accuracy": 0.25,
+        "macro_f1": 0.0008202563725434737,
+        "up_recall": 0.0,
+        "down_recall": 0.0,
+        "neutral_recall": 1.0,
+        "choppy_recall": 0.0,
+        "confusion_matrix": {
+          "up": {
+            "up": 0,
+            "down": 0,
+            "neutral": 19248,
+            "choppy": 0
+          },
+          "down": {
+            "up": 0,
+            "down": 0,
+            "neutral": 17987,
+            "choppy": 0
+          },
+          "neutral": {
+            "up": 0,
+            "down": 0,
+            "neutral": 145,
+            "choppy": 0
+          },
+          "choppy": {
+            "up": 0,
+            "down": 0,
+            "neutral": 50862,
+            "choppy": 0
+          }
+        },
+        "total_samples": 88242
+      },
+      "baseline_b": {
+        "balanced_accuracy": 0.2619178860741092,
+        "macro_f1": 0.029839982486731663,
+        "up_recall": 0.03361388196176226,
+        "down_recall": 0.034747317507088454,
+        "neutral_recall": 0.9793103448275862,
+        "choppy_recall": 0.0,
+        "confusion_matrix": {
+          "up": {
+            "up": 647,
+            "down": 778,
+            "neutral": 17823,
+            "choppy": 0
+          },
+          "down": {
+            "up": 723,
+            "down": 625,
+            "neutral": 16639,
+            "choppy": 0
+          },
+          "neutral": {
+            "up": 1,
+            "down": 2,
+            "neutral": 142,
+            "choppy": 0
+          },
+          "choppy": {
+            "up": 1881,
+            "down": 2022,
+            "neutral": 46959,
+            "choppy": 0
+          }
+        },
+        "total_samples": 88242
+      },
+      "best_baseline": "B",
+      "best_balanced_accuracy": 0.2619178860741092
+    },
+    "30": {
+      "baseline_a": {
+        "balanced_accuracy": 0.25,
+        "macro_f1": 3.399510470492249e-05,
+        "up_recall": 0.0,
+        "down_recall": 0.0,
+        "neutral_recall": 1.0,
+        "choppy_recall": 0.0,
+        "confusion_matrix": {
+          "up": {
+            "up": 0,
+            "down": 0,
+            "neutral": 11056,
+            "choppy": 0
+          },
+          "down": {
+            "up": 0,
+            "down": 0,
+            "neutral": 10181,
+            "choppy": 0
+          },
+          "neutral": {
+            "up": 0,
+            "down": 0,
+            "neutral": 6,
+            "choppy": 0
+          },
+          "choppy": {
+            "up": 0,
+            "down": 0,
+            "neutral": 66999,
+            "choppy": 0
+          }
+        },
+        "total_samples": 88242
+      },
+      "baseline_b": {
+        "balanced_accuracy": 0.22650773679706526,
+        "macro_f1": 0.027658506231163053,
+        "up_recall": 0.035274963820549926,
+        "down_recall": 0.03742265003437776,
+        "neutral_recall": 0.8333333333333334,
+        "choppy_recall": 0.0,
+        "confusion_matrix": {
+          "up": {
+            "up": 390,
+            "down": 475,
+            "neutral": 10191,
+            "choppy": 0
+          },
+          "down": {
+            "up": 425,
+            "down": 381,
+            "neutral": 9375,
+            "choppy": 0
+          },
+          "neutral": {
+            "up": 1,
+            "down": 0,
+            "neutral": 5,
+            "choppy": 0
+          },
+          "choppy": {
+            "up": 2436,
+            "down": 2571,
+            "neutral": 61992,
+            "choppy": 0
+          }
+        },
+        "total_samples": 88242
+      },
+      "best_baseline": "A",
+      "best_balanced_accuracy": 0.25
+    },
+    "60": {
+      "baseline_a": {
+        "balanced_accuracy": 0.0,
+        "macro_f1": 0.0,
+        "up_recall": 0.0,
+        "down_recall": 0.0,
+        "neutral_recall": 0.0,
+        "choppy_recall": 0.0,
+        "confusion_matrix": {
+          "up": {
+            "up": 0,
+            "down": 0,
+            "neutral": 7730,
+            "choppy": 0
+          },
+          "down": {
+            "up": 0,
+            "down": 0,
+            "neutral": 6852,
+            "choppy": 0
+          },
+          "neutral": {
+            "up": 0,
+            "down": 0,
+            "neutral": 0,
+            "choppy": 0
+          },
+          "choppy": {
+            "up": 0,
+            "down": 0,
+            "neutral": 73660,
+            "choppy": 0
+          }
+        },
+        "total_samples": 88242
+      },
+      "baseline_b": {
+        "balanced_accuracy": 0.019007122687854615,
+        "macro_f1": 0.026042026088060083,
+        "up_recall": 0.03764553686934023,
+        "down_recall": 0.03838295388207823,
+        "neutral_recall": 0.0,
+        "choppy_recall": 0.0,
+        "confusion_matrix": {
+          "up": {
+            "up": 291,
+            "down": 359,
+            "neutral": 7080,
+            "choppy": 0
+          },
+          "down": {
+            "up": 291,
+            "down": 263,
+            "neutral": 6298,
+            "choppy": 0
+          },
+          "neutral": {
+            "up": 0,
+            "down": 0,
+            "neutral": 0,
+            "choppy": 0
+          },
+          "choppy": {
+            "up": 2670,
+            "down": 2805,
+            "neutral": 68185,
+            "choppy": 0
+          }
+        },
+        "total_samples": 88242
+      },
+      "best_baseline": "B",
+      "best_balanced_accuracy": 0.019007122687854615
+    }
+  },
+  "range_evaluation": {
+    "10": {
+      "trained_quantiles": {
+        "return_q10": -0.0005328188682914514,
+        "return_q50": 6.370299117541833e-06,
+        "return_q90": 0.000529797463643833
+      },
+      "metrics": {
+        "pinball_loss_q10": 0.011145345667484353,
+        "pinball_loss_q50": 0.019901599111685216,
+        "pinball_loss_q90": 0.010557200657105817,
+        "pinball_loss_avg": 0.013868048478758463,
+        "coverage_q10": 0.055641789691936415,
+        "coverage_q90": 0.9453439231370594,
+        "total_samples": 88261
+      }
+    },
+    "30": {
+      "trained_quantiles": {
+        "return_q10": -0.0009301311569016924,
+        "return_q50": 1.3090440480367782e-05,
+        "return_q90": 0.000928897664555928
+      },
+      "metrics": {
+        "pinball_loss_q10": 0.01945142121786558,
+        "pinball_loss_q50": 0.03460279677080141,
+        "pinball_loss_q90": 0.01792900891133889,
+        "pinball_loss_avg": 0.023994408966668625,
+        "coverage_q10": 0.05534720884648939,
+        "coverage_q90": 0.9483803718516672,
+        "total_samples": 88261
+      }
+    },
+    "60": {
+      "trained_quantiles": {
+        "return_q10": -0.0013278333166691692,
+        "return_q50": 2.0423689438775483e-05,
+        "return_q90": 0.00132916947107411
+      },
+      "metrics": {
+        "pinball_loss_q10": 0.027708567068285162,
+        "pinball_loss_q50": 0.049188818042241546,
+        "pinball_loss_q90": 0.025085084127542713,
+        "pinball_loss_avg": 0.033994156412689804,
+        "coverage_q10": 0.05556247946431606,
+        "coverage_q90": 0.9474399791527401,
+        "total_samples": 88261
+      }
+    }
+  },
+  "summary": {
+    "direction_baselines_established": true,
+    "range_baselines_established": true
+  },
+  "data_periods": {
+    "train": {
+      "start": "2024-01-01T22:00:00Z",
+      "end": "2025-07-21T20:37:00Z",
+      "bars": 573874
+    },
+    "test": {
+      "start": "2025-10-28T21:59:00Z",
+      "end": "2026-01-26T20:59:00Z",
+      "bars": 88321
+    },
+    "val": {
+      "start": "2025-07-21T22:38:00Z",
+      "end": "2025-10-28T19:58:00Z",
+      "bars": 101162
+    }
+  },
+  "range_baseline_train_split": "train",
+  "label_distributions": {
+    "10": {
+      "up": 19248,
+      "down": 17987,
+      "neutral": 145,
+      "choppy": 50862
+    },
+    "30": {
+      "up": 11056,
+      "down": 10181,
+      "neutral": 6,
+      "choppy": 66999
+    },
+    "60": {
+      "up": 7730,
+      "down": 6852,
+      "neutral": 0,
+      "choppy": 73660
+    }
+  }
+}

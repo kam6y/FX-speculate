@@ -58,8 +58,8 @@ class LabelResult:
 
 def generate_labels(
     bars: Sequence[OhlcvBar],
-    horizons: List[int] = None,
-    config: BarrierConfig = None,
+    horizons: List[int] | None = None,
+    config: BarrierConfig | None = None,
 ) -> LabelResult:
     """
     Generate 4-class labels for multiple horizons using ATR20-based barriers.

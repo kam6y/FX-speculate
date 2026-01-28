@@ -478,6 +478,11 @@ debug_artifact_url は debug=true の場合に infer レスポンスで返却し
 
 - 混同行列、期間別レポート（各ホライズン）
 
+#### 指標算出の注記（固定）
+
+- ベースライン比較は Balanced Accuracy / Macro-F1 / Up Recall / Down Recall の各指標について、Baseline-A/B の高い方を基準とする
+- 評価期間内にサンプルが存在しないクラスは Recall/F1 を 0.0 とし、Balanced Accuracy/Macro-F1 は4クラス平均で算出する（レポートに注記）
+
 ### 14.3 Range Forecast（分位点：ホライズン別）
 
 各ホライズンで以下を満たす。
