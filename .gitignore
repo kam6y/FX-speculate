@@ -54,3 +54,4 @@ Thumbs.db
 
 # Project-specific outputs
 shap_analysis_v5.png
+shap_analysis_*.png

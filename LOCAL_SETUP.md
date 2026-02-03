@@ -23,13 +23,13 @@ Place the training data file here:
 - `usd_jpy_1min_20231028_20260131_utc.parquet`
 
 If you want to store it elsewhere, edit `DATA_PATH` in:
-- `米ドルFxモデル構築_v_5_local.ipynb`
+- `米ドルFxモデル構築_v_6.ipynb`
 
 ## 5) Run JupyterLab
 ```
 uv run jupyter lab
 ```
-Open `米ドルFxモデル構築_v_5_local.ipynb` and run cells top to bottom.
+Open `米ドルFxモデル構築_v_6.ipynb` and run cells top to bottom.
 
 ## GPU note (CatBoost)
 - The notebook defaults to `USE_GPU = True`.
