@@ -1,0 +1,21 @@
+[project]
+name = "fx-speculate"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "pandas>=2.0,<3.0",
+  "numpy>=1.26,<2.0",
+  "matplotlib",
+  "seaborn",
+  "ta",
+  "optuna",
+  "shap",
+  "catboost",
+  "scikit-learn",
+  "pyarrow",
+  "fastparquet",
+  "numba>=0.58",
+  "requests",
+  "jupyterlab",
+  "ipykernel",
+]

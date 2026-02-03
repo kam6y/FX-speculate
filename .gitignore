@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+.env.*
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data and large files
+*.parquet
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.jsonl
+
+# ML artifacts and logs
+artifacts/
+catboost_info/
+mlruns/
+wandb/
+lightning_logs/
+tensorboard/
+*.pkl
+*.joblib
+*.onnx
+*.pt
+*.pth
+*.h5
+*.ckpt
+*.sav
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific outputs
+shap_analysis_v5.png
