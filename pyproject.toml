@@ -11,6 +11,8 @@ dependencies = [
   "optuna",
   "shap",
   "catboost",
+  "lightgbm",
+  "xgboost",
   "scikit-learn",
   "pyarrow",
   "fastparquet",
