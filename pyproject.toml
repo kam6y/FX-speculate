@@ -21,4 +21,8 @@ dependencies = [
   "jupyterlab",
   "ipykernel",
   "pytest",
+  "torch>=2.0,<3.0",
 ]
+
+[tool.uv]
+extra-index-url = ["https://download.pytorch.org/whl/cu121"]
