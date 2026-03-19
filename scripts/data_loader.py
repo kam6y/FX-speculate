@@ -34,9 +34,11 @@ def load_data(data_dir: str = "data") -> pd.DataFrame:
     path = find_latest_parquet(data_dir)
     df = pd.read_parquet(path)
 
-    # timestamp を datetime に変換
+    # timestamp を datetime(UTC) に変換
     if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    elif df["timestamp"].dt.tz is None:
+        df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
 
     # 重複除去
     df = df.drop_duplicates(subset=["timestamp"], keep="last")
