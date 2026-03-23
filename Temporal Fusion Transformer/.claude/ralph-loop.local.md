@@ -2,9 +2,9 @@
 active: true
 iteration: 1
 session_id: 
-max_iterations: 100
-completion_promise: null
-started_at: "2026-03-21T14:53:51Z"
+max_iterations: 50
+completion_promise: "DIRECTION ACHIEVED"
+started_at: "2026-03-23T00:16:45Z"
 ---
 
-train_tft.py のハイパーパラメータやアーキテクチャを1つ変更し、uv run python train_tft.pyを実行して精度を改善せよ。改善したら artifacts/best_tft_metrics.json に保存。Output <promise>IMPROVED</promise> when direction_accuracy > 0.58
+CLAUDE.mdに従い、train_ensemble.pyを1つ改善してuv run python train_ensemble.pyを実行。artifacts/best_ensemble_metrics.jsonと比較して改善ならベスト更新、悪化ならリバート。Output <promise>DIRECTION ACHIEVED</promise> when direction_accuracy > 0.58
