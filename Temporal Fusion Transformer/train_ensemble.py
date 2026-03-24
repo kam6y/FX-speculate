@@ -29,21 +29,14 @@ from sklearn.metrics import roc_auc_score, accuracy_score
 from xgboost import XGBClassifier
 
 from train_tft import (
-    fetch_market_data,
-    add_technical_indicators,
-    add_calendar_features,
-    add_event_distance_features,
-    add_holiday_flags,
-    add_news_sentiment_proxy,
-    add_market_regime,
-    preprocess,
+    prepare_data,
+    create_datasets,
     train_tft,
     evaluate,
     _build_unknown_reals,
     CONFIG,
     ARTIFACT_DIR,
     DEVICE,
-    PIN_MEMORY,
     KNOWN_CATEGORICALS,
     KNOWN_REALS,
     UNKNOWN_CATEGORICALS,
@@ -53,9 +46,15 @@ from pytorch_forecasting.data import GroupNormalizer
 import lightning.pytorch as pl
 
 
-# ===================================================================
-# 1. Meta-Feature Extraction
-# ===================================================================
+def safe_roc_auc(y_true, y_prob, default: float = 0.5) -> float:
+    """単一クラスのみの場合に ValueError を回避する roc_auc_score ラッパー"""
+    try:
+        return float(roc_auc_score(y_true, y_prob))
+    except ValueError:
+        return default
+
+
+
 def extract_meta_features(
     preds: torch.Tensor,
     actuals: torch.Tensor,
@@ -70,13 +69,11 @@ def extract_meta_features(
     Returns:
         (X_meta DataFrame [N, ~12], y_meta ndarray [N])
     """
-    p = preds.detach().cpu().numpy()
-    a = actuals.detach().cpu().numpy()
+    p = preds.cpu().numpy()
+    a = actuals.cpu().numpy()
     n = p.shape[0]
-    pred_len = p.shape[1]
     q_mid = p.shape[2] // 2
 
-    # --- TFT quantile features ---
     q50_1d = p[:, 0, q_mid]
     q10_1d = p[:, 0, 0]
     q90_1d = p[:, 0, -1]
@@ -92,7 +89,7 @@ def extract_meta_features(
 
     # encoder_last fallback (pytorch-forecasting では通常 None にならない)
     if encoder_last is not None:
-        enc = encoder_last.detach().cpu().numpy()
+        enc = encoder_last.cpu().numpy()
     else:
         warnings.warn("encoder_last is None: pred_vs_current/y_meta may be unreliable")
         enc = a[:, 0]
@@ -269,8 +266,6 @@ def train_xgb_classifier(
     X_train = X_train.fillna(0)
 
     scale_pos = float((y_oof == 0).sum() / max((y_oof == 1).sum(), 1))
-    use_gpu = torch.cuda.is_available()
-
     def objective(trial: optuna.Trial) -> float:
         params = {
             "max_depth": trial.suggest_int("max_depth", 3, 8),
@@ -281,7 +276,7 @@ def train_xgb_classifier(
             "scale_pos_weight": scale_pos,
             "eval_metric": "logloss",
             "tree_method": "hist",
-            "device": "cuda" if use_gpu else "cpu",
+            "device": DEVICE.type,
             "random_state": config["RANDOM_SEED"],
         }
 
@@ -291,11 +286,7 @@ def train_xgb_classifier(
             clf = XGBClassifier(**params)
             clf.fit(X_train.iloc[train_idx], y_oof[train_idx])
             y_prob = clf.predict_proba(X_train.iloc[val_idx])[:, 1]
-            try:
-                auc = roc_auc_score(y_oof[val_idx], y_prob)
-            except ValueError:
-                auc = 0.5
-            scores.append(auc)
+            scores.append(safe_roc_auc(y_oof[val_idx], y_prob))
         return float(np.mean(scores))
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -313,7 +304,7 @@ def train_xgb_classifier(
         "scale_pos_weight": scale_pos,
         "eval_metric": "logloss",
         "tree_method": "hist",
-        "device": "cuda" if use_gpu else "cpu",
+        "device": DEVICE.type,
         "random_state": config["RANDOM_SEED"],
     }
     final_clf = XGBClassifier(**best_params)
@@ -342,21 +333,17 @@ def evaluate_ensemble(
     X_eval = X_test.copy()
     if label_encoder is not None and "market_regime" in X_eval.columns:
         known = set(label_encoder.classes_)
-        X_eval["market_regime"] = X_eval["market_regime"].map(
-            lambda v: v if v in known else label_encoder.classes_[0]
+        regime = X_eval["market_regime"].fillna(label_encoder.classes_[0])
+        X_eval["market_regime"] = label_encoder.transform(
+            np.where(regime.isin(known), regime, label_encoder.classes_[0])
         )
-        X_eval["market_regime"] = label_encoder.transform(X_eval["market_regime"])
     X_eval = X_eval.fillna(0)
 
     y_prob = xgb_model.predict_proba(X_eval)[:, 1]
     y_pred = (y_prob > 0.5).astype(int)
 
     dir_acc = float(accuracy_score(y_test, y_pred))
-
-    try:
-        auc = float(roc_auc_score(y_test, y_prob))
-    except ValueError:
-        auc = 0.5
+    auc = safe_roc_auc(y_test, y_prob)
 
     return {
         "direction_accuracy": round(dir_acc, 4),
@@ -374,38 +361,21 @@ def main():
     warnings.filterwarnings("ignore")
     pl.seed_everything(CONFIG["RANDOM_SEED"])
 
-    print(f"Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
+    print(f"Device: {DEVICE}")
     print(f"Artifacts: {ARTIFACT_DIR}\n")
 
-    # ── 1. Data Collection & Feature Engineering ──
-    print("=== 1. Data Collection ===")
-    df = fetch_market_data(CONFIG)
+    # ── 1-3. Data Collection, Feature Engineering & Preprocessing ──
+    df = prepare_data(CONFIG)
 
-    print("\n=== 2. Feature Engineering ===")
-    df = add_technical_indicators(df)
-    df = add_calendar_features(df)
-    df = add_event_distance_features(df)
-    df = add_holiday_flags(df)
-    df = add_news_sentiment_proxy(df)
-    df = add_market_regime(df)
-
-    print("\n=== 3. Preprocessing ===")
-    df = preprocess(df)
-
-    # ── 2. Stable feature schema ──
-    schema_path = ARTIFACT_DIR / "feature_schema.json"
-    if schema_path.exists():
-        schema_path.unlink()
-    unknown_reals = _build_unknown_reals(df)
+    unknown_reals = _build_unknown_reals(df, force_rebuild=True)
 
     # ── 3. Walk-Forward OOF ──
     print("\n=== 4. Walk-Forward OOF Generation ===")
     wf_config = {
         **CONFIG,
-        "MAX_EPOCHS": CONFIG.get("WF_FINETUNE_EPOCHS", 20),
         "PATIENCE": 5,
-        "DROPOUT": 0.1,  # lower dropout for better OOF predictions
-        "LEARNING_RATE": 5e-4,  # lower LR for finer convergence
+        "DROPOUT": 0.1,
+        "LEARNING_RATE": 5e-4,
     }
     X_oof, y_oof = walk_forward_oof(df, wf_config, unknown_reals)
 
@@ -420,8 +390,6 @@ def main():
 
     # ── 5. Final TFT -> Test ──
     print("\n=== 6. Final TFT Training + Test Prediction ===")
-    from train_tft import create_datasets
-
     training, validation, test = create_datasets(df, CONFIG)
     tft_model, _ = train_tft(training, validation, CONFIG)
     _, preds, actuals, encoder_last = evaluate(tft_model, test, CONFIG)

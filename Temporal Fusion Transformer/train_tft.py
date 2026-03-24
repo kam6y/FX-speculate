@@ -234,8 +234,10 @@ def fetch_market_data(config: dict) -> pd.DataFrame:
     start = config["START_DATE"]
     print(f"データ取得: {start} ~ {end}")
 
-    # USD/JPY
-    fx = yf.download("JPY=X", start=start, end=end, auto_adjust=True, progress=False)
+    tickers = ["JPY=X", "^VIX", "GC=F", "^TNX"]
+    raw = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False, group_by="ticker")
+
+    fx = raw["JPY=X"]
     df = pd.DataFrame(
         {
             "open": fx["Open"].squeeze(),
@@ -245,20 +247,10 @@ def fetch_market_data(config: dict) -> pd.DataFrame:
         }
     )
 
-    # VIX
-    vix = yf.download("^VIX", start=start, end=end, auto_adjust=True, progress=False)
-    if not vix.empty:
-        df["vix"] = vix["Close"].squeeze().reindex(df.index)
-
-    # Gold (XAU/USD)
-    gold = yf.download("GC=F", start=start, end=end, auto_adjust=True, progress=False)
-    if not gold.empty:
-        df["gold"] = gold["Close"].squeeze().reindex(df.index)
-
-    # US 10-Year Treasury Yield
-    tnx = yf.download("^TNX", start=start, end=end, auto_adjust=True, progress=False)
-    if not tnx.empty:
-        df["us10y"] = tnx["Close"].squeeze().reindex(df.index)
+    for ticker, col_name in [("^VIX", "vix"), ("GC=F", "gold"), ("^TNX", "us10y")]:
+        data = raw[ticker]
+        if not data["Close"].isna().all():
+            df[col_name] = data["Close"].squeeze().reindex(df.index)
 
     # 日米金利差: FRED API が利用可能なら正確な値、なければ US10Y のみ
     if HAS_FRED and config.get("FRED_API_KEY"):
@@ -326,17 +318,23 @@ def _compute_event_distances(
     """
     events = np.sort(pd.to_datetime(event_dates).values)
     idx_arr = idx.values
-    pos = np.searchsorted(events, idx_arr)
+    if len(events) == 0:
+        return np.full(len(idx), max_distance)
 
-    distances = np.empty(len(idx), dtype=np.float64)
-    for i, p in enumerate(pos):
-        candidates = []
-        if p < len(events):
-            candidates.append(abs(int((events[p] - idx_arr[i]) / np.timedelta64(1, "D"))))
-        if p > 0:
-            candidates.append(abs(int((idx_arr[i] - events[p - 1]) / np.timedelta64(1, "D"))))
-        distances[i] = min(candidates) if candidates else max_distance
-    return np.clip(distances, 0, max_distance)
+    pos = np.searchsorted(events, idx_arr)
+    one_day = np.timedelta64(1, "D")
+
+    # 右隣イベントへの距離
+    right_idx = np.minimum(pos, len(events) - 1)
+    dist_right = np.abs((events[right_idx] - idx_arr) / one_day).astype(np.float64)
+    dist_right = np.where(pos < len(events), dist_right, max_distance)
+
+    # 左隣イベントへの距離
+    left_idx = np.maximum(pos - 1, 0)
+    dist_left = np.abs((idx_arr - events[left_idx]) / one_day).astype(np.float64)
+    dist_left = np.where(pos > 0, dist_left, max_distance)
+
+    return np.clip(np.minimum(dist_right, dist_left), 0, max_distance)
 
 
 def _nfp_dates(start_year: int, end_year: int) -> list[str]:
@@ -381,8 +379,10 @@ def add_holiday_flags(df: pd.DataFrame) -> pd.DataFrame:
         years = range(df.index[0].year, df.index[-1].year + 2)
         us_hol = _holidays_lib.UnitedStates(years=years)
         jp_hol = _holidays_lib.Japan(years=years)
-        df["holiday_us"] = df.index.map(lambda d: 1.0 if d in us_hol else 0.0)
-        df["holiday_jp"] = df.index.map(lambda d: 1.0 if d in jp_hol else 0.0)
+        us_dates = pd.to_datetime(list(us_hol.keys()))
+        jp_dates = pd.to_datetime(list(jp_hol.keys()))
+        df["holiday_us"] = df.index.isin(us_dates).astype(float)
+        df["holiday_jp"] = df.index.isin(jp_dates).astype(float)
         n_us = int(df["holiday_us"].sum())
         n_jp = int(df["holiday_jp"].sum())
         print(f"  祝日フラグ: US={n_us}日, JP={n_jp}日")
@@ -494,6 +494,18 @@ def preprocess(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
     return df
 
 
+def prepare_data(config: dict) -> pd.DataFrame:
+    """データ取得 → 特徴量エンジニアリング → 前処理の一括パイプライン"""
+    df = fetch_market_data(config)
+    df = add_technical_indicators(df)
+    df = add_calendar_features(df)
+    df = add_event_distance_features(df)
+    df = add_holiday_flags(df)
+    df = add_news_sentiment_proxy(df)
+    df = add_market_regime(df)
+    return preprocess(df, config)
+
+
 # ===================================================================
 # 4. TimeSeriesDataSet 作成
 # ===================================================================
@@ -538,7 +550,9 @@ OPTIONAL_UNKNOWN = ["vix", "gold", "us10y", "interest_rate_diff", "sentiment_pro
 UNKNOWN_CATEGORICALS = ["market_regime"]
 
 
-def _build_unknown_reals(df: pd.DataFrame, config: dict | None = None) -> list[str]:
+def _build_unknown_reals(
+    df: pd.DataFrame, config: dict | None = None, *, force_rebuild: bool = False
+) -> list[str]:
     """利用可能な unknown reals を動的に構築し、確定した特徴量リストを返す。
 
     スキーマ安定性のため、欠損の多いオプション特徴量はNaN補完して含めるか除外する。
@@ -547,20 +561,16 @@ def _build_unknown_reals(df: pd.DataFrame, config: dict | None = None) -> list[s
 
     オプション特徴量の欠損判定は訓練データのみで行う（テストデータリーク防止）。
     """
-    # スキーマバージョン: 特徴量定義変更時にインクリメント
     _SCHEMA_VERSION = 3
     schema_path = ARTIFACT_DIR / "feature_schema.json"
 
-    # 保存済みスキーマがあればロード（モデル再利用時の一貫性）
-    if schema_path.exists():
+    if not force_rebuild and schema_path.exists():
         with open(schema_path) as f:
             saved = json.load(f)
-        # dict 形式 (v2+): バージョンチェック付き
         if isinstance(saved, dict) and saved.get("version") == _SCHEMA_VERSION:
             cols = saved["columns"]
             if all(c in df.columns for c in cols):
                 return cols
-        # list 形式 (v1) またはバージョン不一致: 再構築
 
     # 訓練データのみで欠損判定（テストデータリーク防止）
     cfg = config if config is not None else CONFIG
@@ -759,7 +769,7 @@ def evaluate(
     # --- 方向精度 (GPU) ---
     # target=close: encoder 末端 close との比較で方向判定
     if encoder_last is not None:
-        enc = encoder_last.to(DEVICE, non_blocking=True)
+        enc = encoder_last
         # 1日先
         actual_dir_1d = actuals[:, 0] > enc
         pred_dir_1d = q50[:, 0] > enc
@@ -1086,26 +1096,11 @@ def main():
     warnings.filterwarnings("ignore")
     pl.seed_everything(CONFIG["RANDOM_SEED"])
 
-    device_info = "CUDA" if torch.cuda.is_available() else "CPU"
-    print(f"Device: {device_info}")
+    print(f"Device: {DEVICE}")
     print(f"Artifacts: {ARTIFACT_DIR}\n")
 
-    # ── 1. データ収集 ──
-    print("=== 1. データ収集 ===")
-    df = fetch_market_data(CONFIG)
-
-    # ── 2. 特徴量エンジニアリング ──
-    print("\n=== 2. 特徴量エンジニアリング ===")
-    df = add_technical_indicators(df)
-    df = add_calendar_features(df)
-    df = add_event_distance_features(df)
-    df = add_holiday_flags(df)
-    df = add_news_sentiment_proxy(df)
-    df = add_market_regime(df)
-
-    # ── 3. 前処理 ──
-    print("\n=== 3. 前処理 ===")
-    df = preprocess(df)
+    # ── 1-3. データ収集・特徴量・前処理 ──
+    df = prepare_data(CONFIG)
 
     # ── 4. Optuna (optional) ──
     if args.optuna:
@@ -1132,7 +1127,7 @@ def main():
     seeds = [base_seed + i * 137 for i in range(n_seeds)]
 
     print(f"\n=== 5. TFT アンサンブル学習 ({n_seeds} seeds) ===")
-    all_preds = []
+    sum_preds = None
     best_model = None
     best_val_dir = -1.0
 
@@ -1142,7 +1137,11 @@ def main():
         model, trainer = train_tft(training, validation, CONFIG)
         m_val, _, _, _ = evaluate(model, validation, CONFIG)
         m_test, preds_i, actuals, encoder_last = evaluate(model, test, CONFIG)
-        all_preds.append(preds_i)
+        if sum_preds is None:
+            sum_preds = preds_i.clone()
+        else:
+            sum_preds += preds_i
+        del preds_i
         print(f"  val_dir={m_val['direction_accuracy']:.4f}  test_dir={m_test['direction_accuracy']:.4f}  test_5d={m_test['direction_accuracy_5d']:.4f}")
 
         if m_val["direction_accuracy"] > best_val_dir:
@@ -1150,11 +1149,10 @@ def main():
             best_model = model
         else:
             del model
-        if torch.cuda.is_available():
+        if PIN_MEMORY:
             torch.cuda.empty_cache()
 
-    # アンサンブル: 全seedの予測を平均
-    ens_preds = torch.stack(all_preds).mean(dim=0)
+    ens_preds = sum_preds / n_seeds
     q_mid = ens_preds.size(2) // 2
     q50_ens = ens_preds[:, :, q_mid].to(DEVICE)
     actuals_dev = actuals.to(DEVICE)
