@@ -70,7 +70,6 @@ cd "C:/Users/daiya/OneDrive/ドキュメント/FX-speculate/Temporal Fusion Tran
 
 `artifacts/ensemble_metrics.json` を読み、以下を確認:
 - **direction_accuracy** (1日先方向精度, 主要目標)
-- **direction_accuracy_5d** (5日先方向精度)
 - **roc_auc** (ROC-AUC)
 - **up_ratio_predicted** (予測のUp比率, 0.50 に近いほど良い)
 
@@ -87,7 +86,6 @@ cd "C:/Users/daiya/OneDrive/ドキュメント/FX-speculate/Temporal Fusion Tran
 --- Iteration N ---
 Change: [何を変更したか]
 Dir_1d: [今回] (Best: [ベスト])
-Dir_5d: [今回]
 AUC: [今回]
 Result: [IMPROVED / REVERTED]
 ```

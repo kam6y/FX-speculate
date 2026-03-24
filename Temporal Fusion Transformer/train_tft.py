@@ -469,13 +469,14 @@ def add_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
 # ===================================================================
 # 3. 前処理 (Section 3.2)
 # ===================================================================
-def preprocess(df: pd.DataFrame) -> pd.DataFrame:
+def preprocess(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
     """データ前処理: 欠損値補完 → 外れ値クリッピング → NaN除去"""
+    cfg = config if config is not None else CONFIG
     df = df.ffill()
 
     # 対数リターンの外れ値を ±4σ でクリッピング (訓練データのみから統計量を算出)
     if "log_return" in df.columns:
-        train_end = int(len(df) * CONFIG["TRAIN_RATIO"])
+        train_end = int(len(df) * cfg["TRAIN_RATIO"])
         train_lr = df["log_return"].iloc[:train_end]
         mu, sigma = train_lr.mean(), train_lr.std()
         df["log_return"] = df["log_return"].clip(mu - 4 * sigma, mu + 4 * sigma)
@@ -537,15 +538,17 @@ OPTIONAL_UNKNOWN = ["vix", "gold", "us10y", "interest_rate_diff", "sentiment_pro
 UNKNOWN_CATEGORICALS = ["market_regime"]
 
 
-def _build_unknown_reals(df: pd.DataFrame) -> list[str]:
+def _build_unknown_reals(df: pd.DataFrame, config: dict | None = None) -> list[str]:
     """利用可能な unknown reals を動的に構築し、確定した特徴量リストを返す。
 
     スキーマ安定性のため、欠損の多いオプション特徴量はNaN補完して含めるか除外する。
     一度確定したリストは artifacts/feature_schema.json に保存し、
     以降のセッションで同じスキーマを再利用する。
+
+    オプション特徴量の欠損判定は訓練データのみで行う（テストデータリーク防止）。
     """
     # スキーマバージョン: 特徴量定義変更時にインクリメント
-    _SCHEMA_VERSION = 2
+    _SCHEMA_VERSION = 3
     schema_path = ARTIFACT_DIR / "feature_schema.json"
 
     # 保存済みスキーマがあればロード（モデル再利用時の一貫性）
@@ -559,9 +562,14 @@ def _build_unknown_reals(df: pd.DataFrame) -> list[str]:
                 return cols
         # list 形式 (v1) またはバージョン不一致: 再構築
 
+    # 訓練データのみで欠損判定（テストデータリーク防止）
+    cfg = config if config is not None else CONFIG
+    train_end = int(len(df) * cfg["TRAIN_RATIO"])
+    df_train = df.iloc[:train_end]
+
     cols = list(UNKNOWN_REALS_BASE)
     for c in OPTIONAL_UNKNOWN:
-        if c in df.columns and df[c].notna().sum() > len(df) * 0.5:
+        if c in df.columns and df_train[c].notna().sum() > len(df_train) * 0.5:
             cols.append(c)
 
     # 確定したスキーマを保存
@@ -636,6 +644,7 @@ def train_tft(
     validation: TimeSeriesDataSet,
     config: dict,
     max_epochs: int | None = None,
+    fold_id: str | None = None,
 ) -> tuple[TemporalFusionTransformer, pl.Trainer]:
     """TFT モデル学習 -QuantileLoss + AdamW + EarlyStopping + AMP"""
     train_dl = training.to_dataloader(
@@ -647,7 +656,8 @@ def train_tft(
         pin_memory=PIN_MEMORY,
     )
 
-    ckpt_dir = str(ARTIFACT_DIR / "checkpoints")
+    ckpt_subdir = f"checkpoints_{fold_id}" if fold_id else "checkpoints"
+    ckpt_dir = str(ARTIFACT_DIR / ckpt_subdir)
     early_stop = EarlyStopping(
         monitor="val_loss", patience=config["PATIENCE"], mode="min", verbose=True
     )

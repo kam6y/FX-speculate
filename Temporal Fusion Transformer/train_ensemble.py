@@ -65,8 +65,10 @@ def extract_meta_features(
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """TFT evaluate() 出力から XGB 用メタ特徴量を抽出。
 
+    TFT quantile出力 (6個) + df由来の auxiliary 特徴量 (最大6個) を結合。
+
     Returns:
-        (X_meta DataFrame [N, ~14], y_meta ndarray [N])
+        (X_meta DataFrame [N, ~12], y_meta ndarray [N])
     """
     p = preds.detach().cpu().numpy()
     a = actuals.detach().cpu().numpy()
@@ -108,6 +110,16 @@ def extract_meta_features(
         }
     )
 
+    # --- Auxiliary features from df (encoder末端日の既知の値を使用) ---
+    aux_col_names = ["rsi_14", "macd_diff", "atr_14", "fomc_distance", "boj_distance", "market_regime"]
+    # sample_indices は予測対象日のインデックス。auxiliary は予測時点で既知の
+    # encoder末端日（= 予測対象日の1日前）の値を使う。
+    pos_indices = df.index.get_indexer(sample_indices)
+    encoder_pos = np.maximum(pos_indices - 1, 0)
+    for col_name in aux_col_names:
+        if col_name in df.columns:
+            meta[col_name] = df[col_name].values[encoder_pos[:n]]
+
     # --- Target: 1-day direction (inverted: 1=Down, 0=Up) ---
     # XGB learns inverse correlation better; invert labels at training
     y_meta = (a[:, 0] <= enc).astype(np.int32)
@@ -141,7 +153,7 @@ def walk_forward_oof(
     cursor = initial_train
     fold = 0
 
-    while cursor + step <= oof_end:
+    while cursor < oof_end:
         remaining = oof_end - cursor
         if remaining < 5:
             break
@@ -205,6 +217,7 @@ def walk_forward_oof(
                 val_ds,
                 config,
                 max_epochs=config.get("WF_FINETUNE_EPOCHS", 20),
+                fold_id=f"wf_{fold:03d}",
             )
             metrics, preds, actuals, encoder_last = evaluate(model, test_ds, config)
 
@@ -340,19 +353,6 @@ def evaluate_ensemble(
 
     dir_acc = float(accuracy_score(y_test, y_pred))
 
-    # 5-day direction
-    a_np = actuals.detach().cpu().numpy()
-    enc_np = (
-        encoder_last.detach().cpu().numpy()
-        if encoder_last is not None
-        else a_np[:, 0]
-    )
-    if actuals.size(1) >= 5:
-        actual_5d = (a_np[:, 4] <= enc_np).astype(int)  # inverted to match training labels
-        dir_acc_5d = float(accuracy_score(actual_5d, y_pred))
-    else:
-        dir_acc_5d = dir_acc
-
     try:
         auc = float(roc_auc_score(y_test, y_prob))
     except ValueError:
@@ -360,7 +360,6 @@ def evaluate_ensemble(
 
     return {
         "direction_accuracy": round(dir_acc, 4),
-        "direction_accuracy_5d": round(dir_acc_5d, 4),
         "roc_auc": round(auc, 4),
         "n_samples": len(y_test),
         "up_ratio_actual": round(float(y_test.mean()), 4),
@@ -455,7 +454,6 @@ def main():
     print(f"Saved to {ARTIFACT_DIR}")
     print(f"\n{'='*50}")
     print(f"Direction (1d): {ens_metrics['direction_accuracy']:.4f}")
-    print(f"Direction (5d): {ens_metrics['direction_accuracy_5d']:.4f}")
     print(f"ROC-AUC: {ens_metrics['roc_auc']:.4f}")
     print(f"{'='*50}")
 
