@@ -101,23 +101,9 @@ def extract_meta_features(
         }
     )
 
-    # --- Auxiliary features from df (encoder末端日 = 予測時点で既知の値を使用) ---
-    aux_cols = ["rsi_14", "macd_diff", "atr_14", "fomc_distance", "boj_distance"]
-    if sample_indices is not None and len(sample_indices) >= n:
-        # sample_indices は予測対象日。1日前 (encoder末端) の特徴量を使う
-        idx_pos = df.index.get_indexer(sample_indices[:n])
-        encoder_end_pos = np.clip(idx_pos - 1, 0, len(df) - 1)
-        encoder_end_idx = df.index[encoder_end_pos]
-
-        for col in aux_cols:
-            if col in df.columns:
-                meta[col] = df.loc[encoder_end_idx, col].values[:n]
-
-        if "market_regime" in df.columns:
-            meta["market_regime"] = df.loc[encoder_end_idx, "market_regime"].values[:n]
-
-    # --- Target: 1-day direction ---
-    y_meta = (a[:, 0] > enc).astype(np.int32)
+    # --- Target: 1-day direction (inverted: 1=Down, 0=Up) ---
+    # XGB learns inverse correlation better; invert labels at training
+    y_meta = (a[:, 0] <= enc).astype(np.int32)
 
     return meta, y_meta
 
@@ -280,7 +266,7 @@ def train_xgb_classifier(
         }
 
         scores = []
-        tscv = TimeSeriesSplit(n_splits=3)
+        tscv = TimeSeriesSplit(n_splits=5)
         for train_idx, val_idx in tscv.split(X_train):
             clf = XGBClassifier(**params)
             clf.fit(X_train.iloc[train_idx], y_oof[train_idx])
@@ -355,7 +341,7 @@ def evaluate_ensemble(
         else a_np[:, 0]
     )
     if actuals.size(1) >= 5:
-        actual_5d = (a_np[:, 4] > enc_np).astype(int)
+        actual_5d = (a_np[:, 4] <= enc_np).astype(int)  # inverted to match training labels
         dir_acc_5d = float(accuracy_score(actual_5d, y_pred))
     else:
         dir_acc_5d = dir_acc
@@ -412,6 +398,8 @@ def main():
         **CONFIG,
         "MAX_EPOCHS": CONFIG.get("WF_FINETUNE_EPOCHS", 20),
         "PATIENCE": 5,
+        "DROPOUT": 0.1,  # lower dropout for better OOF predictions
+        "LEARNING_RATE": 5e-4,  # lower LR for finer convergence
     }
     X_oof, y_oof = walk_forward_oof(df, wf_config, unknown_reals)
 
