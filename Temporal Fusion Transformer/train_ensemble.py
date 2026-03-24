@@ -80,12 +80,19 @@ def extract_meta_features(
     q90_1d = p[:, 0, -1]
     q_spread = q90_1d - q10_1d
     lower_spread = q50_1d - q10_1d
-    q_skew = (q90_1d - q50_1d) / np.maximum(lower_spread, 1e-8)
+    upper_spread = q90_1d - q50_1d
+    # quantile crossing (q10 > q50) 時は q_skew=0 として扱い外れ値を防止
+    q_skew = np.where(
+        lower_spread > 1e-4,
+        upper_spread / lower_spread,
+        0.0,
+    )
 
-    # encoder_last fallback
+    # encoder_last fallback (pytorch-forecasting では通常 None にならない)
     if encoder_last is not None:
         enc = encoder_last.detach().cpu().numpy()
     else:
+        warnings.warn("encoder_last is None: pred_vs_current/y_meta may be unreliable")
         enc = a[:, 0]
 
     pred_vs_current = (q50_1d - enc) / np.maximum(np.abs(enc), 1e-8)

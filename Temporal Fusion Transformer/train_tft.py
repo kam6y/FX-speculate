@@ -66,13 +66,23 @@ class DirectionAwareQuantileLoss(QuantileLoss):
         # 標準 quantile loss: [B, pred_len, n_quantiles]
         ql = super().loss(y_pred, target)
 
-        # 方向ペナルティ: median 予測と実績の符号不一致に追加コスト
+        # 方向ペナルティ: 連続タイムステップ間の変化方向が不一致の場合にペナルティ
+        # GroupNormalizer 正規化後の値を使用。pred_len >= 2 の場合のみ有効。
         q_mid = y_pred.size(-1) // 2
         pred_median = y_pred[..., q_mid]
-        sign_mismatch = (pred_median * target < 0).float()
-        dir_penalty = sign_mismatch * (pred_median - target).abs()
 
-        # [B, pred_len] → [B, pred_len, 1] にブロードキャスト
+        if pred_median.size(-1) >= 2:
+            pred_change = pred_median[..., 1:] - pred_median[..., :-1]
+            target_change = target[..., 1:] - target[..., :-1]
+            sign_mismatch = (pred_change * target_change < 0).float()
+            dir_penalty = sign_mismatch * (pred_change - target_change).abs()
+            # [B, pred_len-1] → pad to [B, pred_len] → [B, pred_len, 1]
+            dir_penalty = torch.nn.functional.pad(dir_penalty, (1, 0), value=0.0)
+        else:
+            # pred_len=1: 符号ベースのフォールバック (正規化後の値で部分的に有効)
+            sign_mismatch = (pred_median * target < 0).float()
+            dir_penalty = sign_mismatch * (pred_median - target).abs()
+
         return ql + self.direction_weight * dir_penalty.unsqueeze(-1)
 
 # ===================================================================
@@ -463,9 +473,11 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     """データ前処理: 欠損値補完 → 外れ値クリッピング → NaN除去"""
     df = df.ffill()
 
-    # 対数リターンの外れ値を ±4σ でクリッピング
+    # 対数リターンの外れ値を ±4σ でクリッピング (訓練データのみから統計量を算出)
     if "log_return" in df.columns:
-        mu, sigma = df["log_return"].mean(), df["log_return"].std()
+        train_end = int(len(df) * CONFIG["TRAIN_RATIO"])
+        train_lr = df["log_return"].iloc[:train_end]
+        mu, sigma = train_lr.mean(), train_lr.std()
         df["log_return"] = df["log_return"].clip(mu - 4 * sigma, mu + 4 * sigma)
 
     df = df.dropna()
@@ -663,7 +675,10 @@ def train_tft(
         attention_head_size=config["ATTENTION_HEAD_SIZE"],
         dropout=config["DROPOUT"],
         hidden_continuous_size=config["HIDDEN_CONTINUOUS_SIZE"],
-        loss=QuantileLoss(quantiles=config["QUANTILES"]),
+        loss=DirectionAwareQuantileLoss(
+            quantiles=config["QUANTILES"],
+            direction_weight=config.get("DIRECTION_LOSS_WEIGHT", 0.0),
+        ),
         optimizer="adamw",
         weight_decay=1e-2,
         reduce_on_plateau_patience=4,
