@@ -124,20 +124,20 @@ CONFIG = {
     "START_DATE": "2019-01-01",
     "END_DATE": None,  # None = 本日
     # --- TFT アーキテクチャ (Section 2.2) ---
-    "HIDDEN_SIZE": 160,
+    "HIDDEN_SIZE": 256,  # OPT-5: 160→256 モデル容量増加
     "ATTENTION_HEAD_SIZE": 4,
     "DROPOUT": 0.3,
     "HIDDEN_CONTINUOUS_SIZE": 8,
-    "MAX_ENCODER_LENGTH": 60,
-    "MAX_PREDICTION_LENGTH": 20,
+    "MAX_ENCODER_LENGTH": 90,  # OPT-6: 60→90 エンコーダ長拡大
+    "MAX_PREDICTION_LENGTH": 10,  # OPT-11: 20→10 予測長短縮で精度向上狙い
     "QUANTILES": [0.1, 0.5, 0.9],
     # --- 学習 (Section 4.3) ---
     "LEARNING_RATE": 1e-3,
     "BATCH_SIZE": 64,
-    "MAX_EPOCHS": 100,
-    "PATIENCE": 10,
+    "MAX_EPOCHS": 30,
+    "PATIENCE": 5,
     "GRADIENT_CLIP_VAL": 1.0,
-    "DIRECTION_LOSS_WEIGHT": 1.0,  # 方向ペナルティの重み (0=QuantileLossのみ)
+    "DIRECTION_LOSS_WEIGHT": 2.5,  # OPT-20: 2.0→2.5 方向ペナルティ微増
     # --- データ分割 (Section 3.2) ---
     "TRAIN_RATIO": 0.70,
     "VAL_RATIO": 0.15,
@@ -156,7 +156,7 @@ CONFIG = {
     # --- その他 ---
     "FRED_API_KEY": os.environ.get("FRED_API_KEY"),
     "RANDOM_SEED": 42,
-    "ENSEMBLE_SEEDS": 5,  # アンサンブル seed 数
+    "ENSEMBLE_SEEDS": 1,  # アンサンブル seed 数
 }
 
 BASE_DIR = Path(__file__).parent
@@ -701,7 +701,7 @@ def train_tft(
         ),
         optimizer="adamw",
         weight_decay=1e-2,
-        reduce_on_plateau_patience=4,
+        reduce_on_plateau_patience=3,  # OPT-14: 4→3 LR減衰を早める
     )
     print(f"パラメータ数: {tft.size() / 1e3:.1f}k")
 
@@ -1223,8 +1223,35 @@ def main():
     print(f"Artifacts: {ARTIFACT_DIR}")
     print(f"\n{'='*50}")
     print(f"MAE: {metrics['mae']:.4f}  |  Direction: {metrics['direction_accuracy']:.4f}")
+    print(f"Dir_5d: {metrics.get('direction_accuracy_5d', 'N/A')}  |  Ens_dir_5d: {metrics.get('ensemble_direction_5d', 'N/A')}")
     print(f"Sharpe: {trade_metrics.get('sharpe_ratio', 'N/A')}  |  Trades: {trade_metrics.get('n_trades', 0)}")
+    print(f"PF: {trade_metrics.get('profit_factor', 'N/A')}  |  WinRate: {trade_metrics.get('win_rate', 'N/A')}")
     print(f"{'='*50}")
+
+    # ── 最適化ログ追記 (ralph-loop 用) ──
+    opt_log_path = ARTIFACT_DIR / "optimization_log.json"
+    opt_log: list = []
+    if opt_log_path.exists():
+        try:
+            with open(opt_log_path) as f:
+                opt_log = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            opt_log = []
+
+    from datetime import datetime
+    opt_entry = {
+        "iteration": len(opt_log) + 1,
+        "timestamp": datetime.now().isoformat(),
+        "metrics": all_metrics,
+        "config_snapshot": {
+            k: v for k, v in CONFIG.items()
+            if k not in {"FRED_API_KEY"} and isinstance(v, (str, int, float, bool, list)) or v is None
+        },
+    }
+    opt_log.append(opt_entry)
+    with open(opt_log_path, "w") as f:
+        json.dump(opt_log, f, indent=2, ensure_ascii=False, default=str)
+    print(f"Optimization log: iteration {opt_entry['iteration']} saved")
 
     return all_metrics
 

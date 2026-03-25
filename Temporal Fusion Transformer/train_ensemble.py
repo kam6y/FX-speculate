@@ -382,13 +382,7 @@ def main():
 
     # ── 3. Walk-Forward OOF ──
     print("\n=== 4. Walk-Forward OOF Generation ===")
-    wf_config = {
-        **CONFIG,
-        "PATIENCE": 5,
-        "DROPOUT": 0.1,
-        "LEARNING_RATE": 5e-4,
-    }
-    X_oof, y_oof = walk_forward_oof(df, wf_config, unknown_reals)
+    X_oof, y_oof = walk_forward_oof(df, CONFIG, unknown_reals)
 
     X_oof.to_parquet(ARTIFACT_DIR / "meta_features.parquet", index=False)
 
@@ -401,9 +395,9 @@ def main():
 
     # ── 5. Final TFT -> Test ──
     print("\n=== 6. Final TFT Training + Test Prediction ===")
-    training, validation, test = create_datasets(df, wf_config)
-    tft_model, _ = train_tft(training, validation, wf_config)
-    _, preds, actuals, encoder_last = evaluate(tft_model, test, wf_config)
+    training, validation, test = create_datasets(df, CONFIG)
+    tft_model, _ = train_tft(training, validation, CONFIG)
+    _, preds, actuals, encoder_last = evaluate(tft_model, test, CONFIG)
 
     n = len(df)
     val_end = int(n * (CONFIG["TRAIN_RATIO"] + CONFIG["VAL_RATIO"]))
