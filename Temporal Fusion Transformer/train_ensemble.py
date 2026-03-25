@@ -254,8 +254,8 @@ def train_xgb_classifier(
     X_oof: pd.DataFrame,
     y_oof: np.ndarray,
     config: dict,
-) -> tuple[XGBClassifier, LabelEncoder | None]:
-    """OOF メタ特徴量で XGBClassifier を学習 (Optuna 付き)。"""
+) -> tuple[XGBClassifier, LabelEncoder | None, float]:
+    """OOF メタ特徴量で XGBClassifier を学習 (Optuna 付き)。最適閾値も返す。"""
     le = None
     X_train = X_oof.copy()
     if "market_regime" in X_train.columns:
@@ -274,7 +274,7 @@ def train_xgb_classifier(
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "scale_pos_weight": scale_pos,
-            "eval_metric": "logloss",
+            "eval_metric": "auc",
             "tree_method": "hist",
             "device": DEVICE.type,
             "random_state": config["RANDOM_SEED"],
@@ -302,7 +302,7 @@ def train_xgb_classifier(
     best_params = {
         **study.best_params,
         "scale_pos_weight": scale_pos,
-        "eval_metric": "logloss",
+        "eval_metric": "auc",
         "tree_method": "hist",
         "device": DEVICE.type,
         "random_state": config["RANDOM_SEED"],
@@ -310,7 +310,17 @@ def train_xgb_classifier(
     final_clf = XGBClassifier(**best_params)
     final_clf.fit(X_train, y_oof)
 
-    return final_clf, le
+    # OOF 閾値最適化: accuracy を最大化する閾値を探索
+    oof_prob = final_clf.predict_proba(X_train)[:, 1]
+    best_thr, best_acc = 0.5, 0.0
+    for thr in np.arange(0.30, 0.71, 0.01):
+        acc = accuracy_score(y_oof, (oof_prob > thr).astype(int))
+        if acc > best_acc:
+            best_acc = acc
+            best_thr = thr
+    print(f"  OOF optimal threshold: {best_thr:.2f} (acc={best_acc:.4f})")
+
+    return final_clf, le, best_thr
 
 
 # ===================================================================
@@ -324,6 +334,7 @@ def evaluate_ensemble(
     df: pd.DataFrame,
     sample_indices: pd.Index,
     label_encoder: LabelEncoder | None,
+    threshold: float = 0.5,
 ) -> dict:
     """アンサンブル評価: XGB の方向予測精度を計算。"""
     X_test, y_test = extract_meta_features(
@@ -340,7 +351,7 @@ def evaluate_ensemble(
     X_eval = X_eval.fillna(0)
 
     y_prob = xgb_model.predict_proba(X_eval)[:, 1]
-    y_pred = (y_prob > 0.5).astype(int)
+    y_pred = (y_prob > threshold).astype(int)
 
     dir_acc = float(accuracy_score(y_test, y_pred))
     auc = safe_roc_auc(y_test, y_prob)
@@ -383,16 +394,16 @@ def main():
 
     # ── 4. XGB Training ──
     print("\n=== 5. XGB Classifier Training ===")
-    xgb_model, label_encoder = train_xgb_classifier(X_oof, y_oof, CONFIG)
+    xgb_model, label_encoder, opt_threshold = train_xgb_classifier(X_oof, y_oof, CONFIG)
 
     with open(ARTIFACT_DIR / "xgb_model.pkl", "wb") as f:
         pickle.dump({"model": xgb_model, "label_encoder": label_encoder}, f)
 
     # ── 5. Final TFT -> Test ──
     print("\n=== 6. Final TFT Training + Test Prediction ===")
-    training, validation, test = create_datasets(df, CONFIG)
-    tft_model, _ = train_tft(training, validation, CONFIG)
-    _, preds, actuals, encoder_last = evaluate(tft_model, test, CONFIG)
+    training, validation, test = create_datasets(df, wf_config)
+    tft_model, _ = train_tft(training, validation, wf_config)
+    _, preds, actuals, encoder_last = evaluate(tft_model, test, wf_config)
 
     n = len(df)
     val_end = int(n * (CONFIG["TRAIN_RATIO"] + CONFIG["VAL_RATIO"]))
@@ -401,7 +412,8 @@ def main():
     # ── 6. Ensemble Evaluation ──
     print("\n=== 7. Ensemble Evaluation ===")
     ens_metrics = evaluate_ensemble(
-        xgb_model, preds, actuals, encoder_last, df, test_indices, label_encoder
+        xgb_model, preds, actuals, encoder_last, df, test_indices, label_encoder,
+        threshold=opt_threshold,
     )
     for k, v in ens_metrics.items():
         print(f"  {k}: {v}")
