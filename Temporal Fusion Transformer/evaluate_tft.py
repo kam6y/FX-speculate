@@ -191,7 +191,7 @@ def plot_equity_curve(preds: torch.Tensor, actuals: torch.Tensor,
     actual_1d = actuals[:, 0].cpu().numpy()
 
     cost = (config["SPREAD_PIPS"] + config["SLIPPAGE_PIPS"]) * config["PIP_SIZE"]
-    cost_lr = cost / 150.0
+    cost_lr = cost / config.get("PRICE_REFERENCE", 150.0)
 
     signals = np.zeros_like(pred_1d)
     signals[pred_1d > 0] = 1.0
@@ -242,7 +242,7 @@ def plot_monthly_returns(preds: torch.Tensor, actuals: torch.Tensor,
     actual_1d = actuals[:, 0].cpu().numpy()
 
     cost = (config["SPREAD_PIPS"] + config["SLIPPAGE_PIPS"]) * config["PIP_SIZE"]
-    cost_lr = cost / 150.0
+    cost_lr = cost / config.get("PRICE_REFERENCE", 150.0)
 
     signals = np.zeros_like(pred_1d)
     signals[pred_1d > 0] = 1.0
@@ -250,7 +250,11 @@ def plot_monthly_returns(preds: torch.Tensor, actuals: torch.Tensor,
     pnl = signals * actual_1d - np.abs(signals) * cost_lr
 
     plot_dates = dates[:len(pnl)]
-    df_pnl = pd.DataFrame({"date": plot_dates, "pnl": pnl})
+    valid_mask = ~pd.isnull(plot_dates)
+    df_pnl = pd.DataFrame({"date": plot_dates[valid_mask], "pnl": pnl[valid_mask]})
+    if df_pnl.empty:
+        print("  -> eval_monthly_returns.png SKIPPED (no valid dates)")
+        return
     df_pnl["year"] = df_pnl["date"].dt.year
     df_pnl["month"] = df_pnl["date"].dt.month
 
@@ -369,7 +373,10 @@ def plot_quantile_fan(preds: torch.Tensor, actuals: torch.Tensor,
     # X軸に日付ラベル (間引き)
     tick_step = max(1, n // 10)
     ax.set_xticks(x[::tick_step])
-    ax.set_xticklabels([d.strftime("%m/%d") for d in plot_dates[::tick_step]], rotation=45)
+    ax.set_xticklabels(
+        [d.strftime("%m/%d") if not pd.isna(d) else "" for d in plot_dates[::tick_step]],
+        rotation=45,
+    )
 
     fig.tight_layout()
     fig.savefig(EVAL_DIR / "eval_quantile_fan.png", dpi=150, bbox_inches="tight")
@@ -433,6 +440,10 @@ def plot_horizon_accuracy(preds: torch.Tensor, actuals: torch.Tensor):
         horizons.append(h + 1)
         accs.append(acc)
 
+    if not accs:
+        print("  -> eval_horizon_accuracy.png SKIPPED (no horizons)")
+        return
+
     fig, ax = plt.subplots(figsize=(10, 5))
     bars = ax.bar(horizons, accs, color="#2196F3", alpha=0.8, edgecolor="white")
     ax.axhline(0.5, color="#F44336", linewidth=1, linestyle="--", alpha=0.7, label="ランダム")
@@ -460,7 +471,7 @@ def plot_pnl_distribution(preds: torch.Tensor, actuals: torch.Tensor, config: di
     actual_1d = actuals[:, 0].cpu().numpy()
 
     cost = (config["SPREAD_PIPS"] + config["SLIPPAGE_PIPS"]) * config["PIP_SIZE"]
-    cost_lr = cost / 150.0
+    cost_lr = cost / config.get("PRICE_REFERENCE", 150.0)
 
     signals = np.zeros_like(pred_1d)
     signals[pred_1d > 0] = 1.0
@@ -599,6 +610,11 @@ def main():
     print("=== 1. データ準備 ===")
     df = prepare_data(CONFIG)
 
+    # cost→log_return変換の参照価格をデータから設定
+    if "close" in df.columns:
+        CONFIG["PRICE_REFERENCE"] = float(df["close"].mean())
+        print(f"  PRICE_REFERENCE: {CONFIG['PRICE_REFERENCE']:.1f}")
+
     # 2. データセット作成
     print("\n=== 2. データセット作成 ===")
     training, validation, test = create_datasets(df, CONFIG)
@@ -633,7 +649,11 @@ def main():
     sample_dates = pd.DatetimeIndex([
         time_idx_to_date.get(int(ti), pd.NaT) for ti in pred_time_idx.cpu().numpy()
     ])
-    print(f"  予測期間: {sample_dates[0].date()} ~ {sample_dates[-1].date()}")
+    valid_dates = sample_dates.dropna()
+    if len(valid_dates):
+        print(f"  予測期間: {valid_dates[0].date()} ~ {valid_dates[-1].date()}")
+    else:
+        print("  予測期間: 日付マッピング失敗")
 
     # 5. メトリクス計算
     print("\n=== 5. メトリクス計算 ===")

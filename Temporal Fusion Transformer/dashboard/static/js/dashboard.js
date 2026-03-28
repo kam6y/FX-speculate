@@ -232,9 +232,22 @@ async function loadBacktest() {
         // Hide chart placeholders
         document.querySelectorAll('.chart-placeholder').forEach(el => el.classList.add('hidden'));
 
-        // tft_metrics.json のアンサンブルメトリクスを表示
+        // メトリクスカード: バックテストデータのsummaryを優先（データソース一貫性）
         if (metricsRes.ok) {
             metricsData = await metricsRes.json();
+        }
+        if (backtestData?.summary) {
+            const s = backtestData.summary;
+            const h1d = backtestData.horizon_accuracy?.find(h => h.horizon === "1D");
+            renderMetrics({
+                ensemble_direction_1d: h1d?.accuracy ?? s.win_rate,
+                trade_sharpe_ratio: s.sharpe_ratio,
+                trade_profit_factor: s.profit_factor,
+                trade_total_pnl: s.total_pnl,
+                trade_max_drawdown: s.max_drawdown,
+                mae_1d: s.mae_1d,
+            });
+        } else if (metricsData) {
             renderMetrics(metricsData);
         }
 

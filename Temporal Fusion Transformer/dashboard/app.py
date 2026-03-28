@@ -14,7 +14,6 @@
 import json
 import logging
 import sys
-import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -111,11 +110,12 @@ def _scheduled_predict():
                 current_price=result["current_price"] or 0,
             )
 
-        h1 = result["horizons"][0]
-        logger.info(
-            f"Prediction saved: {h1['target_date']} -> {h1['direction']} "
-            f"(lr={h1['pred_log_return']:.6f}, conf={h1['confidence']:.2f})"
-        )
+        if result["horizons"]:
+            h1 = result["horizons"][0]
+            logger.info(
+                f"Prediction saved: {h1['target_date']} -> {h1['direction']} "
+                f"(lr={h1['pred_log_return']:.6f}, conf={h1['confidence']:.2f})"
+            )
 
         # 4. アラートチェック
         metrics = load_saved_metrics()
@@ -205,8 +205,9 @@ async def api_predict():
 
         return JSONResponse(result)
     except Exception as e:
+        logger.error(f"/api/predict failed: {e}", exc_info=True)
         return JSONResponse(
-            {"error": str(e), "traceback": traceback.format_exc()},
+            {"error": "Internal server error"},
             status_code=500,
         )
 
@@ -235,8 +236,9 @@ async def api_backtest():
         data = get_backtest_data_cached()
         return JSONResponse(data)
     except Exception as e:
+        logger.error(f"/api/backtest failed: {e}", exc_info=True)
         return JSONResponse(
-            {"error": str(e), "traceback": traceback.format_exc()},
+            {"error": "Internal server error"},
             status_code=500,
         )
 
@@ -249,8 +251,9 @@ async def api_backtest_refresh():
         data = get_backtest_data_cached(force=True)
         return JSONResponse(data)
     except Exception as e:
+        logger.error(f"/api/backtest/refresh failed: {e}", exc_info=True)
         return JSONResponse(
-            {"error": str(e), "traceback": traceback.format_exc()},
+            {"error": "Internal server error"},
             status_code=500,
         )
 
@@ -263,8 +266,9 @@ async def api_live_equity():
         data = compute_live_equity()
         return JSONResponse(data)
     except Exception as e:
+        logger.error(f"/api/live-equity failed: {e}", exc_info=True)
         return JSONResponse(
-            {"error": str(e), "traceback": traceback.format_exc()},
+            {"error": "Internal server error"},
             status_code=500,
         )
 
@@ -277,8 +281,9 @@ async def api_update_actuals():
         n = update_actuals()
         return JSONResponse({"updated": n})
     except Exception as e:
+        logger.error(f"/api/update-actuals failed: {e}", exc_info=True)
         return JSONResponse(
-            {"error": str(e), "traceback": traceback.format_exc()},
+            {"error": "Internal server error"},
             status_code=500,
         )
 

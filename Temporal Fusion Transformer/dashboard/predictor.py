@@ -51,34 +51,23 @@ warnings.filterwarnings("ignore")
 DASHBOARD_MODEL_DIR = Path(__file__).parent / "model"
 
 
-def find_best_checkpoint() -> Path:
-    """ダッシュボード専用モデルディレクトリから最良チェックポイントを返す。
+def find_all_checkpoints() -> list[Path]:
+    """ダッシュボード専用モデルディレクトリから全チェックポイントを返す。
 
-    dashboard/model/ にデプロイ済みモデルのみを参照。
+    dashboard/model/ にデプロイ済みの全seedモデルを参照。
     デプロイされていなければエラー。
     """
-    ckpts = list(DASHBOARD_MODEL_DIR.glob("*.ckpt"))
+    ckpts = sorted(DASHBOARD_MODEL_DIR.glob("*.ckpt"))
     if not ckpts:
         raise FileNotFoundError(
             f"No deployed model in {DASHBOARD_MODEL_DIR}. "
             "Run 'uv run python train_tft.py --deploy' first."
         )
-    ckpts.sort(key=_parse_val_loss)
-    return ckpts[0]
+    return ckpts
 
 
-def _parse_val_loss(p: Path) -> float:
-    try:
-        return float(p.stem.split("val_loss=")[1].split("-v")[0])
-    except (IndexError, ValueError):
-        return float("inf")
-
-
-def load_model(ckpt_path: Path | None = None) -> TemporalFusionTransformer:
-    """チェックポイントからモデルをロード"""
-    if ckpt_path is None:
-        ckpt_path = find_best_checkpoint()
-    # uvicorn 経由でも確実に __main__ にクラスを登録
+def _load_single_model(ckpt_path: Path) -> TemporalFusionTransformer:
+    """単一チェックポイントからモデルをロード"""
     main_mod = sys.modules.get("__main__")
     if main_mod and not hasattr(main_mod, "DirectionAwareQuantileLoss"):
         main_mod.DirectionAwareQuantileLoss = DirectionAwareQuantileLoss
@@ -86,6 +75,29 @@ def load_model(ckpt_path: Path | None = None) -> TemporalFusionTransformer:
     model.eval()
     model.to(DEVICE)
     return model
+
+
+def load_models() -> list[TemporalFusionTransformer]:
+    """全seedチェックポイントをロードしてアンサンブル用リストを返す"""
+    ckpts = find_all_checkpoints()
+    models = [_load_single_model(p) for p in ckpts]
+    print(f"Loaded {len(models)} model(s) for ensemble")
+    return models
+
+
+def _ensemble_predict(
+    models: list[TemporalFusionTransformer], dl
+) -> torch.Tensor:
+    """複数モデルの予測を平均してアンサンブル予測を返す"""
+    sum_preds = None
+    for m in models:
+        p = m.predict(dl, mode="quantiles").to(DEVICE)
+        if sum_preds is None:
+            sum_preds = p.clone()
+        else:
+            sum_preds += p
+        del p
+    return sum_preds / len(models)
 
 
 def prepare_latest_data() -> pd.DataFrame:
@@ -112,7 +124,7 @@ def create_prediction_dataset(df: pd.DataFrame) -> TimeSeriesDataSet:
         target="log_return",
         group_ids=["group_id"],
         max_encoder_length=CONFIG["MAX_ENCODER_LENGTH"],
-        min_encoder_length=3,
+        min_encoder_length=CONFIG["MIN_ENCODER_LENGTH"],
         max_prediction_length=CONFIG["MAX_PREDICTION_LENGTH"],
         static_categoricals=["group_id"],
         time_varying_known_categoricals=KNOWN_CATEGORICALS,
@@ -137,7 +149,7 @@ def predict_tomorrow() -> dict:
             current_price: 最新終値
             horizons: [{horizon, pred_lr, q10, q90, direction, confidence}, ...]
     """
-    model = load_model()
+    models = load_models()
     df = prepare_latest_data()
 
     # 最新日付と価格
@@ -154,15 +166,12 @@ def predict_tomorrow() -> dict:
     )
 
     with torch.no_grad():
-        preds = model.predict(dl, mode="quantiles").to(DEVICE)
+        preds = _ensemble_predict(models, dl)
 
     # 最後のサンプル (= 最新時点からの予測)
     last_pred = preds[-1]  # [pred_len, n_quantiles]
     n_q = last_pred.size(1)
     q_mid = n_q // 2
-
-    # 次の営業日を計算
-    next_bday = last_date + pd.offsets.BDay(1)
 
     horizons = []
     for h in range(min(last_pred.size(0), 10)):
@@ -190,7 +199,7 @@ def predict_tomorrow() -> dict:
         })
 
     # メモリ解放
-    del model, preds
+    del models, preds
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
@@ -203,8 +212,8 @@ def predict_tomorrow() -> dict:
 
 
 def get_backtest_data() -> dict:
-    """バックテストデータ (エクイティカーブ用) を取得"""
-    model = load_model()
+    """バックテストデータ (エクイティカーブ用) を取得 — アンサンブル予測"""
+    models = load_models()
     df = prepare_latest_data()
 
     n = len(df)
@@ -223,7 +232,7 @@ def get_backtest_data() -> dict:
         target="log_return",
         group_ids=["group_id"],
         max_encoder_length=CONFIG["MAX_ENCODER_LENGTH"],
-        min_encoder_length=3,
+        min_encoder_length=CONFIG["MIN_ENCODER_LENGTH"],
         max_prediction_length=CONFIG["MAX_PREDICTION_LENGTH"],
         static_categoricals=["group_id"],
         time_varying_known_categoricals=KNOWN_CATEGORICALS,
@@ -246,7 +255,7 @@ def get_backtest_data() -> dict:
     )
 
     with torch.no_grad():
-        preds = model.predict(dl, mode="quantiles").to(DEVICE)
+        preds = _ensemble_predict(models, dl)
 
     actuals_list = []
     time_idx_list = []
@@ -327,7 +336,7 @@ def get_backtest_data() -> dict:
             })
 
     cost = (CONFIG["SPREAD_PIPS"] + CONFIG["SLIPPAGE_PIPS"]) * CONFIG["PIP_SIZE"]
-    cost_lr = cost / 150.0
+    cost_lr = cost / CONFIG.get("PRICE_REFERENCE", 150.0)
 
     signals = np.zeros_like(pred_1d)
     signals[pred_1d > 0] = 1.0
@@ -354,7 +363,23 @@ def get_backtest_data() -> dict:
         for _, r in monthly.iterrows()
     ]
 
-    del model, preds, actuals
+    # トレーディングサマリー (バックテストから直接計算)
+    n_trades = int(np.sum(signals != 0))
+    traded_pnl = pnl[signals != 0]
+    if n_trades > 0:
+        win_rate = float(np.sum(traded_pnl > 0) / n_trades)
+        gross_profit = float(traded_pnl[traded_pnl > 0].sum())
+        gross_loss = float(np.abs(traded_pnl[traded_pnl < 0]).sum())
+        profit_factor = gross_profit / max(gross_loss, 1e-10)
+    else:
+        win_rate, profit_factor = 0.0, 0.0
+    total_pnl = float(cum_pnl[-1]) if len(cum_pnl) > 0 else 0.0
+    max_dd = float((cum_pnl - np.maximum.accumulate(cum_pnl)).min()) if len(cum_pnl) > 0 else 0.0
+    sharpe = float(pnl.mean() / max(pnl.std(), 1e-10) * (252 ** 0.5))
+    # MAE (1日先)
+    mae_1d = float(np.abs(pred_1d - actual_1d).mean())
+
+    del models, preds, actuals
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
@@ -370,6 +395,15 @@ def get_backtest_data() -> dict:
         "confidence_calibration": conf_calibration,
         "quantile_calibration": quantile_cal,
         "horizon_accuracy": horizon_acc,
+        "summary": {
+            "sharpe_ratio": round(sharpe, 4),
+            "profit_factor": round(profit_factor, 4),
+            "total_pnl": round(total_pnl, 4),
+            "max_drawdown": round(max_dd, 4),
+            "win_rate": round(win_rate, 4),
+            "n_trades": n_trades,
+            "mae_1d": round(mae_1d, 4),
+        },
     }
 
 
@@ -446,7 +480,8 @@ def update_actuals():
     # 最新の市場データを取得 (直近分だけで十分)
     try:
         import yfinance as yf
-        fx = yf.download("JPY=X", start=pending[0], auto_adjust=True, progress=False)
+        start_dt = (pd.Timestamp(pending[0]) - pd.offsets.BDay(1)).strftime("%Y-%m-%d")
+        fx = yf.download("JPY=X", start=start_dt, auto_adjust=True, progress=False)
         if fx.empty:
             return 0
         close = fx["Close"].squeeze()
@@ -481,7 +516,7 @@ def compute_live_equity() -> dict:
         return {"dates": [], "equity_curve": [], "rolling_accuracy": [],
                 "daily_pnl": [], "n_trades": 0, "win_rate": 0, "total_pnl": 0}
 
-    cost_lr = (CONFIG["SPREAD_PIPS"] + CONFIG["SLIPPAGE_PIPS"]) * CONFIG["PIP_SIZE"] / 150.0
+    cost_lr = (CONFIG["SPREAD_PIPS"] + CONFIG["SLIPPAGE_PIPS"]) * CONFIG["PIP_SIZE"] / CONFIG.get("PRICE_REFERENCE", 150.0)
 
     dates = []
     daily_pnl = []

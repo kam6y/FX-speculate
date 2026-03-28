@@ -22,6 +22,9 @@ def get_conn():
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -86,10 +89,17 @@ def save_prediction(prediction_date: str, target_date: str, horizon: int,
                     direction: str, confidence: float, current_price: float):
     with get_conn() as conn:
         conn.execute("""
-            INSERT OR REPLACE INTO predictions
+            INSERT INTO predictions
                 (prediction_date, target_date, horizon, pred_log_return,
                  pred_q10, pred_q90, direction, confidence, current_price)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(prediction_date, target_date, horizon) DO UPDATE SET
+                pred_log_return=excluded.pred_log_return,
+                pred_q10=excluded.pred_q10,
+                pred_q90=excluded.pred_q90,
+                direction=excluded.direction,
+                confidence=excluded.confidence,
+                current_price=excluded.current_price
         """, (prediction_date, target_date, horizon, pred_lr,
               pred_q10, pred_q90, direction, confidence, current_price))
 

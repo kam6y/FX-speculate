@@ -36,7 +36,7 @@ try:
         _safe = str(Path(tempfile.gettempdir()) / "cacert.pem")
         shutil.copy2(_cert, _safe)
         os.environ["CURL_CA_BUNDLE"] = _safe
-except ImportError:
+except (ImportError, OSError):
     pass
 
 import numpy as np
@@ -127,6 +127,7 @@ CONFIG = {
     "PATIENCE": 8,
     "GRADIENT_CLIP_VAL": 1.0,
     "DIRECTION_LOSS_WEIGHT": 0.5,
+    "MIN_ENCODER_LENGTH": 3,  # R8-11: 5→3
     # --- データ分割 (Section 3.2) ---
     "TRAIN_RATIO": 0.70,
     "VAL_RATIO": 0.15,
@@ -142,6 +143,7 @@ CONFIG = {
     "SLIPPAGE_PIPS": 0.1,
     "PIP_SIZE": 0.01,
     "DIRECTION_THRESHOLD_PIPS": 0,
+    "PRICE_REFERENCE": 150.0,  # cost→log_return変換用の参照価格 (main()でデータから更新)
     # --- その他 ---
     "FRED_API_KEY": os.environ.get("FRED_API_KEY"),
     "RANDOM_SEED": 42,
@@ -595,7 +597,7 @@ def create_datasets(
         target="log_return",  # R6-01: close→log_return
         group_ids=["group_id"],
         max_encoder_length=config["MAX_ENCODER_LENGTH"],
-        min_encoder_length=3,  # R8-11: 5→3
+        min_encoder_length=config["MIN_ENCODER_LENGTH"],
         max_prediction_length=config["MAX_PREDICTION_LENGTH"],
         static_categoricals=["group_id"],
         time_varying_known_categoricals=KNOWN_CATEGORICALS,
@@ -654,8 +656,7 @@ def train_tft(
     ckpt_subdir = f"checkpoints_{fold_id}" if fold_id else "checkpoints"
     ckpt_dir_path = ARTIFACT_DIR / ckpt_subdir
     ckpt_dir_path.mkdir(parents=True, exist_ok=True)
-    for old_ckpt in ckpt_dir_path.glob("*.ckpt"):
-        old_ckpt.unlink()
+    old_ckpts = list(ckpt_dir_path.glob("*.ckpt"))
     ckpt_dir = str(ckpt_dir_path)
     early_stop = EarlyStopping(
         monitor="val_loss", patience=config["PATIENCE"], mode="min", verbose=True
@@ -700,6 +701,10 @@ def train_tft(
     best_path = ckpt.best_model_path
     if best_path:
         best_model = TemporalFusionTransformer.load_from_checkpoint(best_path)
+        # 学習成功後に古いチェックポイントを削除（失敗時は前回モデルを保持）
+        for old in old_ckpts:
+            if old.exists() and str(old) != best_path:
+                old.unlink()
     else:
         best_model = tft
 
@@ -820,8 +825,8 @@ def backtest_trading(
     signals[pred_1d < 0] = -1.0  # Sell
 
     # PnL: signals * actual_log_return（log_return は近似的に price_change/price）
-    # cost は price スケールなので log_return スケールに変換（÷150 程度、概算）
-    cost_lr = cost / 150.0  # 概算の log_return スケールコスト
+    # cost は price スケールなので log_return スケールに変換
+    cost_lr = cost / config["PRICE_REFERENCE"]
     pnl = signals * actual_1d - signals.abs() * cost_lr
     traded = signals != 0
     n_trades = int(traded.sum().item())
@@ -923,6 +928,9 @@ def walk_forward_backtest(df: pd.DataFrame, config: dict) -> dict | None:
         # 訓練データからさらに val 分割 (最後10%を検証用、test_ds は未使用)
         val_size = max(int(cursor * 0.1), config["MAX_ENCODER_LENGTH"] + config["MAX_PREDICTION_LENGTH"])
         train_end_idx = cursor - val_size
+        if train_end_idx <= 0:
+            cursor += test_window
+            continue
         train_cutoff_wf = int(full_slice.iloc[train_end_idx - 1]["time_idx"])
         val_cutoff_wf = int(full_slice.iloc[cursor - 1]["time_idx"])
         test_start_wf = int(full_slice.iloc[cursor]["time_idx"])
@@ -935,7 +943,7 @@ def walk_forward_backtest(df: pd.DataFrame, config: dict) -> dict | None:
                 target="log_return",  # R6-01
                 group_ids=["group_id"],
                 max_encoder_length=config["MAX_ENCODER_LENGTH"],
-                min_encoder_length=3,  # create_datasets() と統一
+                min_encoder_length=config["MIN_ENCODER_LENGTH"],
                 max_prediction_length=pred_len,
                 static_categoricals=["group_id"],
                 time_varying_known_categoricals=KNOWN_CATEGORICALS,
@@ -1083,6 +1091,11 @@ def main():
     # ── 1-3. データ収集・特徴量・前処理 ──
     df = prepare_data(CONFIG)
 
+    # cost→log_return変換の参照価格をデータから設定
+    if "close" in df.columns:
+        CONFIG["PRICE_REFERENCE"] = float(df["close"].mean())
+        print(f"  PRICE_REFERENCE: {CONFIG['PRICE_REFERENCE']:.1f}")
+
     # ── 4. Optuna (optional) ──
     if args.optuna:
         best_params = optuna_optimize(df, CONFIG)
@@ -1103,7 +1116,7 @@ def main():
     training, validation, test = create_datasets(df, CONFIG)
 
     # ── 6. マルチseedアンサンブル学習 ──
-    n_seeds = CONFIG.get("ENSEMBLE_SEEDS", 5)
+    n_seeds = CONFIG["ENSEMBLE_SEEDS"]
     base_seed = CONFIG["RANDOM_SEED"]
     seeds = [base_seed + i * 137 for i in range(n_seeds)]
 
@@ -1111,11 +1124,16 @@ def main():
     sum_preds = None
     best_model = None
     best_val_dir = -1.0
+    best_ckpt_path: str | None = None
+    all_ckpt_paths: list[str] = []
 
     for i, seed in enumerate(seeds):
         pl.seed_everything(seed)
         print(f"\n--- Seed {seed} ({i+1}/{n_seeds}) ---")
-        model, trainer = train_tft(training, validation, CONFIG)
+        model, trainer = train_tft(training, validation, CONFIG, fold_id=f"seed_{i}")
+        seed_ckpt = trainer.checkpoint_callback.best_model_path
+        if seed_ckpt:
+            all_ckpt_paths.append(seed_ckpt)
         m_val, _, _, _ = evaluate(model, validation, CONFIG)
         m_test, preds_i, actuals, encoder_last = evaluate(model, test, CONFIG)
         if sum_preds is None:
@@ -1128,6 +1146,7 @@ def main():
         if m_val["direction_accuracy"] > best_val_dir:
             best_val_dir = m_val["direction_accuracy"]
             best_model = model
+            best_ckpt_path = seed_ckpt
         else:
             del model
         if PIN_MEMORY:
@@ -1232,7 +1251,7 @@ def main():
         "metrics": all_metrics,
         "config_snapshot": {
             k: v for k, v in CONFIG.items()
-            if k not in {"FRED_API_KEY"} and (isinstance(v, (str, int, float, bool, list)) or v is None)
+            if k not in _SECRET_KEYS and (isinstance(v, (str, int, float, bool, list)) or v is None)
         },
     }
     opt_log.append(opt_entry)
@@ -1248,21 +1267,22 @@ def main():
         # 既存モデルをクリア
         for old in deploy_dir.glob("*.ckpt"):
             old.unlink()
-        # ベストモデルのチェックポイントをコピー
-        ckpt_dir = ARTIFACT_DIR / "checkpoints"
-        ckpts = list(ckpt_dir.glob("*.ckpt"))
-        if ckpts:
-            best_ckpt = min(ckpts, key=lambda p: float(
-                p.stem.split("val_loss=")[1].split("-v")[0]
-            ) if "val_loss=" in p.stem else float("inf"))
-            dest = deploy_dir / best_ckpt.name
-            shutil.copy2(best_ckpt, dest)
+        # 全seedチェックポイントをコピー (アンサンブル推論用)
+        deployed = 0
+        for ckpt_p in all_ckpt_paths:
+            p = Path(ckpt_p)
+            if p.exists():
+                dest = deploy_dir / f"seed_{deployed}_{p.name}"
+                shutil.copy2(p, dest)
+                print(f"  Deployed: {dest.name}")
+                deployed += 1
+        if deployed > 0:
             # メトリクスも一緒にコピー
             for fname in ["tft_metrics.json", "tft_config.json", "feature_schema.json"]:
                 src = ARTIFACT_DIR / fname
                 if src.exists():
                     shutil.copy2(src, deploy_dir / fname)
-            print(f"Deployed to dashboard: {dest.name}")
+            print(f"Deployed {deployed} seed checkpoints to dashboard")
         else:
             print("Warning: No checkpoint found for deploy")
 
