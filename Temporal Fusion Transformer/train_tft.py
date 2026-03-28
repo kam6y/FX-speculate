@@ -56,23 +56,37 @@ class DirectionAwareQuantileLoss(QuantileLoss):
 
     median 予測の符号が実績と一致しない場合に追加ペナルティを課す。
     これにより TFT が「0に近い安全な予測」ではなく方向性を学習する。
+    累積方向ペナルティにより、全Horizonの方向精度を改善する。
     """
 
-    def __init__(self, quantiles=None, direction_weight: float = 1.0, **kwargs):
+    def __init__(self, quantiles=None, direction_weight: float = 1.0,
+                 cumulative_direction_weight: float = 0.0, **kwargs):
         super().__init__(quantiles=quantiles, **kwargs)
         self.direction_weight = direction_weight
+        self.cumulative_direction_weight = cumulative_direction_weight
 
     def loss(self, y_pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # 標準 quantile loss
         ql = super().loss(y_pred, target)
 
-        # R8-04: 符号ベース方向ペナルティ
+        # R8-04: 符号ベース方向ペナルティ (個別ステップ)
         q_mid = y_pred.size(-1) // 2
         pred_median = y_pred[..., q_mid]
         sign_mismatch = (pred_median * target < 0).float()
         dir_penalty = sign_mismatch * (pred_median - target).abs()
 
-        return ql + self.direction_weight * dir_penalty.unsqueeze(-1)
+        total = ql + self.direction_weight * dir_penalty.unsqueeze(-1)
+
+        # R9: 累積方向ペナルティ (全Horizon)
+        if self.cumulative_direction_weight > 0 and pred_median.dim() >= 2:
+            pred_cum = pred_median.cumsum(dim=-1)   # (batch, pred_len)
+            target_cum = target.cumsum(dim=-1)      # (batch, pred_len)
+            cum_mismatch = (pred_cum * target_cum < 0).float()
+            cum_penalty = cum_mismatch * (pred_cum - target_cum).abs()
+            cum_mean = cum_penalty.mean(dim=-1, keepdim=True).expand_as(pred_median)
+            total = total + self.cumulative_direction_weight * cum_mean.unsqueeze(-1)
+
+        return total
 
 # ===================================================================
 # GPU 最適化: Tensor Core (TF32) + cuDNN autotune
@@ -126,7 +140,8 @@ CONFIG = {
     "MAX_EPOCHS": 50,
     "PATIENCE": 8,
     "GRADIENT_CLIP_VAL": 1.0,
-    "DIRECTION_LOSS_WEIGHT": 0.5,
+    "DIRECTION_LOSS_WEIGHT": 0.3,              # R9: 0.5→0.3 (累積ペナルティとの重複を相殺)
+    "CUMULATIVE_DIRECTION_WEIGHT": 0.3,        # R9: 累積方向ペナルティ重み
     # --- データ分割 (Section 3.2) ---
     "TRAIN_RATIO": 0.70,
     "VAL_RATIO": 0.15,
@@ -293,6 +308,12 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     for s in [12, 26]:
         ema = c.ewm(span=s, adjust=False).mean()
         df[f"ema_dist_{s}"] = (c - ema) / ema
+
+    # マルチスケール特徴量 (Horizon精度改善用)
+    df["return_5d"] = df["log_return"].rolling(5).sum()
+    df["return_10d"] = df["log_return"].rolling(10).sum()
+    df["rsi_5"] = ta.momentum.RSIIndicator(c, window=5).rsi()
+    df["volatility_10d"] = df["log_return"].rolling(10).std()
 
     return df
 
@@ -529,6 +550,11 @@ UNKNOWN_REALS_BASE = [
     "ma_dist_20",
     "ma_dist_50",
     "ma_dist_200",
+    # R9: マルチスケール特徴量 (Horizon精度改善用)
+    "return_5d",
+    "return_10d",
+    "rsi_5",
+    "volatility_10d",
 ]
 OPTIONAL_UNKNOWN = ["vix", "gold", "us10y", "interest_rate_diff", "sentiment_proxy"]
 UNKNOWN_CATEGORICALS = ["market_regime"]
@@ -688,6 +714,7 @@ def train_tft(
         loss=DirectionAwareQuantileLoss(
             quantiles=config["QUANTILES"],
             direction_weight=config.get("DIRECTION_LOSS_WEIGHT", 0.0),
+            cumulative_direction_weight=config.get("CUMULATIVE_DIRECTION_WEIGHT", 0.0),
         ),
         optimizer="adamw",
         weight_decay=5e-3,
