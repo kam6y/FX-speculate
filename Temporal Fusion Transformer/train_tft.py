@@ -46,7 +46,7 @@ import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
-from pytorch_forecasting.data import GroupNormalizer
+from pytorch_forecasting.data import GroupNormalizer, EncoderNormalizer  # R3-01
 from pytorch_forecasting.metrics import QuantileLoss
 import optuna
 
@@ -63,25 +63,14 @@ class DirectionAwareQuantileLoss(QuantileLoss):
         self.direction_weight = direction_weight
 
     def loss(self, y_pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        # 標準 quantile loss: [B, pred_len, n_quantiles]
+        # 標準 quantile loss
         ql = super().loss(y_pred, target)
 
-        # 方向ペナルティ: 連続タイムステップ間の変化方向が不一致の場合にペナルティ
-        # GroupNormalizer 正規化後の値を使用。pred_len >= 2 の場合のみ有効。
+        # R8-04: 符号ベース方向ペナルティ
         q_mid = y_pred.size(-1) // 2
         pred_median = y_pred[..., q_mid]
-
-        if pred_median.size(-1) >= 2:
-            pred_change = pred_median[..., 1:] - pred_median[..., :-1]
-            target_change = target[..., 1:] - target[..., :-1]
-            sign_mismatch = (pred_change * target_change < 0).float()
-            dir_penalty = sign_mismatch * (pred_change - target_change).abs()
-            # [B, pred_len-1] → pad to [B, pred_len] → [B, pred_len, 1]
-            dir_penalty = torch.nn.functional.pad(dir_penalty, (1, 0), value=0.0)
-        else:
-            # pred_len=1: 符号ベースのフォールバック (正規化後の値で部分的に有効)
-            sign_mismatch = (pred_median * target < 0).float()
-            dir_penalty = sign_mismatch * (pred_median - target).abs()
+        sign_mismatch = (pred_median * target < 0).float()
+        dir_penalty = sign_mismatch * (pred_median - target).abs()
 
         return ql + self.direction_weight * dir_penalty.unsqueeze(-1)
 
@@ -124,20 +113,20 @@ CONFIG = {
     "START_DATE": "2019-01-01",
     "END_DATE": None,  # None = 本日
     # --- TFT アーキテクチャ (Section 2.2) ---
-    "HIDDEN_SIZE": 256,  # OPT-5: 160→256 モデル容量増加
-    "ATTENTION_HEAD_SIZE": 4,
-    "DROPOUT": 0.3,
+    "HIDDEN_SIZE": 192,
+    "ATTENTION_HEAD_SIZE": 2,
+    "DROPOUT": 0.15,
     "HIDDEN_CONTINUOUS_SIZE": 8,
-    "MAX_ENCODER_LENGTH": 90,  # OPT-6: 60→90 エンコーダ長拡大
-    "MAX_PREDICTION_LENGTH": 10,  # OPT-11: 20→10 予測長短縮で精度向上狙い
+    "MAX_ENCODER_LENGTH": 120,  # R6-10: 90→120
+    "MAX_PREDICTION_LENGTH": 10,
     "QUANTILES": [0.1, 0.5, 0.9],
     # --- 学習 (Section 4.3) ---
     "LEARNING_RATE": 1e-3,
-    "BATCH_SIZE": 64,
-    "MAX_EPOCHS": 30,
-    "PATIENCE": 5,
+    "BATCH_SIZE": 64,  # R6-07: 32→64 (accum=2なので実効128)
+    "MAX_EPOCHS": 50,
+    "PATIENCE": 8,
     "GRADIENT_CLIP_VAL": 1.0,
-    "DIRECTION_LOSS_WEIGHT": 2.5,  # OPT-20: 2.0→2.5 方向ペナルティ微増
+    "DIRECTION_LOSS_WEIGHT": 0.5,
     # --- データ分割 (Section 3.2) ---
     "TRAIN_RATIO": 0.70,
     "VAL_RATIO": 0.15,
@@ -156,7 +145,7 @@ CONFIG = {
     # --- その他 ---
     "FRED_API_KEY": os.environ.get("FRED_API_KEY"),
     "RANDOM_SEED": 42,
-    "ENSEMBLE_SEEDS": 1,  # アンサンブル seed 数
+    "ENSEMBLE_SEEDS": 3,
 }
 
 BASE_DIR = Path(__file__).parent
@@ -530,21 +519,16 @@ KNOWN_REALS = [
     "holiday_jp",
 ]
 UNKNOWN_REALS_BASE = [
-    "close",
-    "log_return",
+    # R7-01: close除外（target=log_returnとの冗長性排除）
     "rsi_14",
-    "macd",
-    "macd_signal",
+    # R2-10: macd, macd_signal, bb_pctb, ema_dist_12, ema_dist_26 削除（冗長特徴量除去）
     "macd_diff",
     "bb_width",
-    "bb_pctb",
     "atr_14",
     "ma_dist_5",
     "ma_dist_20",
     "ma_dist_50",
     "ma_dist_200",
-    "ema_dist_12",
-    "ema_dist_26",
 ]
 OPTIONAL_UNKNOWN = ["vix", "gold", "us10y", "interest_rate_diff", "sentiment_proxy"]
 UNKNOWN_CATEGORICALS = ["market_regime"]
@@ -608,16 +592,17 @@ def create_datasets(
     training = TimeSeriesDataSet(
         df[df["time_idx"] <= train_cutoff],
         time_idx="time_idx",
-        target="close",
+        target="log_return",  # R6-01: close→log_return
         group_ids=["group_id"],
         max_encoder_length=config["MAX_ENCODER_LENGTH"],
+        min_encoder_length=3,  # R8-11: 5→3
         max_prediction_length=config["MAX_PREDICTION_LENGTH"],
         static_categoricals=["group_id"],
         time_varying_known_categoricals=KNOWN_CATEGORICALS,
         time_varying_known_reals=KNOWN_REALS,
         time_varying_unknown_categoricals=unknown_cats,
         time_varying_unknown_reals=unknown_reals,
-        target_normalizer=GroupNormalizer(groups=["group_id"]),
+        target_normalizer=EncoderNormalizer(),
         add_relative_time_idx=True,
         add_target_scales=True,
         add_encoder_length=True,
@@ -667,7 +652,11 @@ def train_tft(
     )
 
     ckpt_subdir = f"checkpoints_{fold_id}" if fold_id else "checkpoints"
-    ckpt_dir = str(ARTIFACT_DIR / ckpt_subdir)
+    ckpt_dir_path = ARTIFACT_DIR / ckpt_subdir
+    ckpt_dir_path.mkdir(parents=True, exist_ok=True)
+    for old_ckpt in ckpt_dir_path.glob("*.ckpt"):
+        old_ckpt.unlink()
+    ckpt_dir = str(ckpt_dir_path)
     early_stop = EarlyStopping(
         monitor="val_loss", patience=config["PATIENCE"], mode="min", verbose=True
     )
@@ -682,8 +671,9 @@ def train_tft(
     trainer = pl.Trainer(
         max_epochs=max_epochs or config["MAX_EPOCHS"],
         accelerator="auto",
-        precision="bf16-mixed" if PIN_MEMORY else "32-true",  # AMP: bf16 (attention mask の overflow 回避)
+        precision="bf16-mixed" if PIN_MEMORY else "32-true",
         gradient_clip_val=config["GRADIENT_CLIP_VAL"],
+        accumulate_grad_batches=2,
         callbacks=[early_stop, LearningRateMonitor(), ckpt],
         enable_progress_bar=True,
     )
@@ -700,8 +690,8 @@ def train_tft(
             direction_weight=config.get("DIRECTION_LOSS_WEIGHT", 0.0),
         ),
         optimizer="adamw",
-        weight_decay=1e-2,
-        reduce_on_plateau_patience=3,  # OPT-14: 4→3 LR減衰を早める
+        weight_decay=5e-3,
+        reduce_on_plateau_patience=4,
     )
     print(f"パラメータ数: {tft.size() / 1e3:.1f}k")
 
@@ -764,26 +754,20 @@ def evaluate(
     diff = q50 - actuals
     mae = diff.abs().mean().item()
     rmse = (diff ** 2).mean().sqrt().item()
-    mape = (diff.abs() / actuals.abs().clamp(min=1e-6)).mean().item() * 100
 
     # --- 方向精度 (GPU) ---
-    # target=close: encoder 末端 close との比較で方向判定
-    if encoder_last is not None:
-        enc = encoder_last
-        # 1日先
-        actual_dir_1d = actuals[:, 0] > enc
-        pred_dir_1d = q50[:, 0] > enc
-        direction_acc = (actual_dir_1d == pred_dir_1d).float().mean().item()
-        # 5日先
-        if actuals.size(1) >= 5:
-            actual_dir_5d = actuals[:, 4] > enc
-            pred_dir_5d = q50[:, 4] > enc
-            direction_acc_5d = (actual_dir_5d == pred_dir_5d).float().mean().item()
-        else:
-            direction_acc_5d = direction_acc
+    # R6-01: target=log_return: 符号で方向判定 (>0 = 上昇)
+    # 1日先
+    actual_dir_1d = actuals[:, 0] > 0
+    pred_dir_1d = q50[:, 0] > 0
+    direction_acc = (actual_dir_1d == pred_dir_1d).float().mean().item()
+    # 5日先 (累積リターン: 1〜5日の合計で方向判定)
+    if actuals.size(1) >= 5:
+        actual_cum_5d = actuals[:, :5].sum(dim=1)
+        pred_cum_5d = q50[:, :5].sum(dim=1)
+        direction_acc_5d = ((actual_cum_5d > 0) == (pred_cum_5d > 0)).float().mean().item()
     else:
-        direction_acc = 0.0
-        direction_acc_5d = 0.0
+        direction_acc_5d = direction_acc
 
     # --- 分位点カバレッジ: 最外分位点間 (GPU) ---
     coverage = ((actuals >= q_lo) & (actuals <= q_hi)).float().mean().item()
@@ -791,7 +775,6 @@ def evaluate(
     metrics: dict = {
         "mae": round(mae, 4),
         "rmse": round(rmse, 4),
-        "mape_pct": round(mape, 4),
         "direction_accuracy": round(direction_acc, 4),
         "direction_accuracy_5d": round(direction_acc_5d, 4),
         "quantile_coverage_80": round(coverage, 4),
@@ -817,8 +800,8 @@ def backtest_trading(
 ) -> dict:
     """簡易トレーディングバックテスト (GPU 上で計算)
 
-    target=close: encoder末端 close との差分でシグナル生成。
-    スプレッド + スリッページを差し引いた PnL を計算。
+    R6-01: target=log_return: 予測値の符号でシグナル生成。
+    PnL は log_return * 想定ポジション。
     """
     if preds.size(0) < 2:
         return {"error": "insufficient_samples"}
@@ -826,27 +809,20 @@ def backtest_trading(
     # GPU 上で全計算
     dev = preds.device
     q_mid = preds.size(2) // 2
-    pred_1d = preds[:, 0, q_mid]   # 1日先 predicted close
-    actual_1d = actuals[:, 0]      # 1日先 actual close
+    pred_1d = preds[:, 0, q_mid]   # 1日先 predicted log_return
+    actual_1d = actuals[:, 0]      # 1日先 actual log_return
 
-    # 現在価格
-    if encoder_last is not None:
-        cur = encoder_last.to(dev, non_blocking=True)
-    else:
-        cur = torch.roll(actual_1d, 1)
-        cur[0] = actual_1d[0]
-
-    threshold = config["DIRECTION_THRESHOLD_PIPS"] * config["PIP_SIZE"]
     cost = (config["SPREAD_PIPS"] + config["SLIPPAGE_PIPS"]) * config["PIP_SIZE"]
 
-    pred_change = pred_1d - cur
-    actual_change = actual_1d - cur
+    # シグナル: predicted log_return の符号
+    signals = torch.zeros_like(pred_1d)
+    signals[pred_1d > 0] = 1.0   # Buy
+    signals[pred_1d < 0] = -1.0  # Sell
 
-    signals = torch.zeros_like(pred_change)
-    signals[pred_change > threshold] = 1.0   # Buy
-    signals[pred_change < -threshold] = -1.0  # Sell
-
-    pnl = signals * actual_change - signals.abs() * cost
+    # PnL: signals * actual_log_return（log_return は近似的に price_change/price）
+    # cost は price スケールなので log_return スケールに変換（÷150 程度、概算）
+    cost_lr = cost / 150.0  # 概算の log_return スケールコスト
+    pnl = signals * actual_1d - signals.abs() * cost_lr
     traded = signals != 0
     n_trades = int(traded.sum().item())
 
@@ -956,16 +932,17 @@ def walk_forward_backtest(df: pd.DataFrame, config: dict) -> dict | None:
             training = TimeSeriesDataSet(
                 full_slice[full_slice["time_idx"] <= train_cutoff_wf],
                 time_idx="time_idx",
-                target="close",
+                target="log_return",  # R6-01
                 group_ids=["group_id"],
                 max_encoder_length=config["MAX_ENCODER_LENGTH"],
+                min_encoder_length=3,  # create_datasets() と統一
                 max_prediction_length=pred_len,
                 static_categoricals=["group_id"],
                 time_varying_known_categoricals=KNOWN_CATEGORICALS,
                 time_varying_known_reals=KNOWN_REALS,
                 time_varying_unknown_categoricals=unknown_cats,
                 time_varying_unknown_reals=unknown_reals,
-                target_normalizer=GroupNormalizer(groups=["group_id"]),
+                target_normalizer=EncoderNormalizer(),
                 add_relative_time_idx=True,
                 add_target_scales=True,
                 add_encoder_length=True,
@@ -1157,15 +1134,15 @@ def main():
     q50_ens = ens_preds[:, :, q_mid].to(DEVICE)
     actuals_dev = actuals.to(DEVICE)
 
-    if encoder_last is not None:
-        enc_dev = encoder_last.to(DEVICE)
-        ens_dir_1d = ((actuals_dev[:, 0] > enc_dev) == (q50_ens[:, 0] > enc_dev)).float().mean().item()
-        if actuals_dev.size(1) >= 5:
-            ens_dir_5d = ((actuals_dev[:, 4] > enc_dev) == (q50_ens[:, 4] > enc_dev)).float().mean().item()
-        else:
-            ens_dir_5d = ens_dir_1d
+    # R6-01: target=log_return — 符号で方向判定
+    ens_dir_1d = ((actuals_dev[:, 0] > 0) == (q50_ens[:, 0] > 0)).float().mean().item()
+    # 5日先: 累積リターン (1〜5日の合計) で方向判定
+    if actuals_dev.size(1) >= 5:
+        ens_cum_5d_act = actuals_dev[:, :5].sum(dim=1)
+        ens_cum_5d_pred = q50_ens[:, :5].sum(dim=1)
+        ens_dir_5d = ((ens_cum_5d_act > 0) == (ens_cum_5d_pred > 0)).float().mean().item()
     else:
-        ens_dir_1d, ens_dir_5d = 0.0, 0.0
+        ens_dir_5d = ens_dir_1d
 
     # ── 7. テスト評価 (アンサンブル) ──
     print(f"\n=== 6. アンサンブル評価 ({n_seeds} seeds) ===")
@@ -1206,6 +1183,12 @@ def main():
     with open(ARTIFACT_DIR / "tft_metrics.json", "w") as f:
         json.dump(all_metrics, f, indent=2, ensure_ascii=False)
 
+    # ダッシュボードのキャッシュを無効化（新モデルの結果で再計算させる）
+    dashboard_cache = BASE_DIR / "dashboard" / "backtest_cache.json"
+    if dashboard_cache.exists():
+        dashboard_cache.unlink()
+        print(f"  Cleared: {dashboard_cache}")
+
     _SECRET_KEYS = {"FRED_API_KEY"}
     serializable_config = {}
     for k, v in CONFIG.items():
@@ -1245,7 +1228,7 @@ def main():
         "metrics": all_metrics,
         "config_snapshot": {
             k: v for k, v in CONFIG.items()
-            if k not in {"FRED_API_KEY"} and isinstance(v, (str, int, float, bool, list)) or v is None
+            if k not in {"FRED_API_KEY"} and (isinstance(v, (str, int, float, bool, list)) or v is None)
         },
     }
     opt_log.append(opt_entry)
