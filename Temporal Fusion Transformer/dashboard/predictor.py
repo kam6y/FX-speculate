@@ -48,21 +48,30 @@ sys.modules["__main__"].DirectionAwareQuantileLoss = DirectionAwareQuantileLoss
 warnings.filterwarnings("ignore")
 
 
+DASHBOARD_MODEL_DIR = Path(__file__).parent / "model"
+
+
 def find_best_checkpoint() -> Path:
-    """val_loss 最小のチェックポイントを返す"""
-    ckpt_dir = ARTIFACT_DIR / "checkpoints"
-    ckpts = list(ckpt_dir.glob("*.ckpt"))
+    """ダッシュボード専用モデルディレクトリから最良チェックポイントを返す。
+
+    dashboard/model/ にデプロイ済みモデルのみを参照。
+    デプロイされていなければエラー。
+    """
+    ckpts = list(DASHBOARD_MODEL_DIR.glob("*.ckpt"))
     if not ckpts:
-        raise FileNotFoundError(f"No checkpoints in {ckpt_dir}")
-
-    def parse_val_loss(p: Path) -> float:
-        try:
-            return float(p.stem.split("val_loss=")[1].split("-v")[0])
-        except (IndexError, ValueError):
-            return float("inf")
-
-    ckpts.sort(key=parse_val_loss)
+        raise FileNotFoundError(
+            f"No deployed model in {DASHBOARD_MODEL_DIR}. "
+            "Run 'uv run python train_tft.py --deploy' first."
+        )
+    ckpts.sort(key=_parse_val_loss)
     return ckpts[0]
+
+
+def _parse_val_loss(p: Path) -> float:
+    try:
+        return float(p.stem.split("val_loss=")[1].split("-v")[0])
+    except (IndexError, ValueError):
+        return float("inf")
 
 
 def load_model(ckpt_path: Path | None = None) -> TemporalFusionTransformer:

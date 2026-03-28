@@ -1068,6 +1068,10 @@ def main():
     parser.add_argument(
         "--walkforward", action="store_true", help="Walk-Forward バックテスト"
     )
+    parser.add_argument(
+        "--deploy", action="store_true",
+        help="学習後にベストモデルを dashboard/model/ にデプロイ",
+    )
     args = parser.parse_args()
 
     warnings.filterwarnings("ignore")
@@ -1235,6 +1239,32 @@ def main():
     with open(opt_log_path, "w") as f:
         json.dump(opt_log, f, indent=2, ensure_ascii=False, default=str)
     print(f"Optimization log: iteration {opt_entry['iteration']} saved")
+
+    # ── ダッシュボードへのモデルデプロイ ──
+    if args.deploy:
+        import shutil
+        deploy_dir = BASE_DIR / "dashboard" / "model"
+        deploy_dir.mkdir(parents=True, exist_ok=True)
+        # 既存モデルをクリア
+        for old in deploy_dir.glob("*.ckpt"):
+            old.unlink()
+        # ベストモデルのチェックポイントをコピー
+        ckpt_dir = ARTIFACT_DIR / "checkpoints"
+        ckpts = list(ckpt_dir.glob("*.ckpt"))
+        if ckpts:
+            best_ckpt = min(ckpts, key=lambda p: float(
+                p.stem.split("val_loss=")[1].split("-v")[0]
+            ) if "val_loss=" in p.stem else float("inf"))
+            dest = deploy_dir / best_ckpt.name
+            shutil.copy2(best_ckpt, dest)
+            # メトリクスも一緒にコピー
+            for fname in ["tft_metrics.json", "tft_config.json", "feature_schema.json"]:
+                src = ARTIFACT_DIR / fname
+                if src.exists():
+                    shutil.copy2(src, deploy_dir / fname)
+            print(f"Deployed to dashboard: {dest.name}")
+        else:
+            print("Warning: No checkpoint found for deploy")
 
     return all_metrics
 

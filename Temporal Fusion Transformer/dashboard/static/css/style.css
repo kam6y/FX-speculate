@@ -534,6 +534,19 @@ body {
 .metric-bad { color: var(--down); }
 .metric-card:has(.metric-bad)::before { background: var(--down); }
 
+.metrics-placeholder {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 32px 0;
+    color: var(--ink-40);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
 /* ── Cards ── */
 .card {
     background: white;

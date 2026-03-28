@@ -53,6 +53,14 @@ tensorboard/
 .DS_Store
 Thumbs.db
 
+# Dashboard deployed model
+**/dashboard/model/
+
+# Dashboard generated files
+tft_dashboard.db
+backtest_cache.json
+metrics_fixed.png
+
 # Project-specific outputs
 shap_analysis_v5.png
 shap_analysis_*.png

@@ -62,7 +62,6 @@ Chart.register(hLinePlugin);
 
 // ─── Init ───
 document.addEventListener("DOMContentLoaded", () => {
-    loadMetrics();
     loadAlerts();
     loadPredictionHistory();
     loadSchedulerStatus();
@@ -117,17 +116,11 @@ const sharedTooltip = {
 };
 
 // ─── Metrics ───
-async function loadMetrics() {
-    try {
-        const res = await fetch("/api/metrics");
-        metricsData = await res.json();
-        renderMetrics(metricsData);
-    } catch (e) { console.error("Metrics:", e); }
-}
-
 function renderMetrics(m) {
     const grid = document.getElementById("metrics-grid");
     if (!grid) return;
+    const placeholder = document.getElementById("metrics-placeholder");
+    if (placeholder) placeholder.remove();
     const items = [
         { label: "1D Direction", value: fmtPct(m.ensemble_direction_1d || m.direction_accuracy), cls: accCls(m.ensemble_direction_1d || m.direction_accuracy), tip: "翌営業日の方向(上昇/下落)を正しく予測できた割合。50%超でランダム以上の予測力。" },
         { label: "Sharpe", value: fmt(m.trade_sharpe_ratio, 2), cls: m.trade_sharpe_ratio > 1 ? "metric-good" : "metric-warn", tip: "Sharpe = E[R] / σ(R)（平均リターン ÷ リターンの標準偏差）。リスク1単位あたりのリターンを示す。1.0以上で良好、2.0以上で優秀。" },
@@ -221,10 +214,11 @@ async function loadBacktest() {
     btn.disabled = true;
     overlay.style.display = "flex";
     try {
-        // バックテスト(キャッシュ)とライブエクイティを並列取得
-        const [btRes, liveRes] = await Promise.all([
+        // バックテスト(キャッシュ)・ライブエクイティ・メトリクスを並列取得
+        const [btRes, liveRes, metricsRes] = await Promise.all([
             fetch("/api/backtest"),
             fetch("/api/live-equity"),
+            fetch("/api/metrics"),
         ]);
         if (!btRes.ok) throw new Error("Backtest failed");
         backtestData = await btRes.json();
@@ -237,6 +231,12 @@ async function loadBacktest() {
 
         // Hide chart placeholders
         document.querySelectorAll('.chart-placeholder').forEach(el => el.classList.add('hidden'));
+
+        // tft_metrics.json のアンサンブルメトリクスを表示
+        if (metricsRes.ok) {
+            metricsData = await metricsRes.json();
+            renderMetrics(metricsData);
+        }
 
         renderEquityCurve(backtestData, liveData);
         renderRollingAccuracy(backtestData, liveData);
