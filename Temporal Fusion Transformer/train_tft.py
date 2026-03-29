@@ -46,7 +46,7 @@ import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
-from pytorch_forecasting.data import GroupNormalizer, EncoderNormalizer  # R3-01
+from pytorch_forecasting.data import EncoderNormalizer  # R3-01
 from pytorch_forecasting.metrics import QuantileLoss
 import optuna
 
@@ -575,6 +575,32 @@ def _build_unknown_reals(
     return cols
 
 
+def _tsds_kwargs(
+    config: dict,
+    unknown_reals: list[str],
+    unknown_cats: list[str],
+    max_prediction_length: int | None = None,
+) -> dict:
+    """TimeSeriesDataSet 共通キーワード引数"""
+    return dict(
+        time_idx="time_idx",
+        target="log_return",
+        group_ids=["group_id"],
+        max_encoder_length=config["MAX_ENCODER_LENGTH"],
+        min_encoder_length=config["MIN_ENCODER_LENGTH"],
+        max_prediction_length=max_prediction_length or config["MAX_PREDICTION_LENGTH"],
+        static_categoricals=["group_id"],
+        time_varying_known_categoricals=KNOWN_CATEGORICALS,
+        time_varying_known_reals=KNOWN_REALS,
+        time_varying_unknown_categoricals=unknown_cats,
+        time_varying_unknown_reals=unknown_reals,
+        target_normalizer=EncoderNormalizer(),
+        add_relative_time_idx=True,
+        add_target_scales=True,
+        add_encoder_length=True,
+    )
+
+
 def create_datasets(
     df: pd.DataFrame, config: dict
 ) -> tuple[TimeSeriesDataSet, TimeSeriesDataSet, TimeSeriesDataSet]:
@@ -593,21 +619,7 @@ def create_datasets(
 
     training = TimeSeriesDataSet(
         df[df["time_idx"] <= train_cutoff],
-        time_idx="time_idx",
-        target="log_return",  # R6-01: close→log_return
-        group_ids=["group_id"],
-        max_encoder_length=config["MAX_ENCODER_LENGTH"],
-        min_encoder_length=config["MIN_ENCODER_LENGTH"],
-        max_prediction_length=config["MAX_PREDICTION_LENGTH"],
-        static_categoricals=["group_id"],
-        time_varying_known_categoricals=KNOWN_CATEGORICALS,
-        time_varying_known_reals=KNOWN_REALS,
-        time_varying_unknown_categoricals=unknown_cats,
-        time_varying_unknown_reals=unknown_reals,
-        target_normalizer=EncoderNormalizer(),
-        add_relative_time_idx=True,
-        add_target_scales=True,
-        add_encoder_length=True,
+        **_tsds_kwargs(config, unknown_reals, unknown_cats),
     )
 
     # Validation: encoder は訓練期間にも跨がるため、train_cutoff 以前のデータも含める
@@ -711,6 +723,13 @@ def train_tft(
     return best_model, trainer
 
 
+def _direction_accuracy(q50: torch.Tensor, actuals: torch.Tensor, horizon: int) -> float:
+    """累積リターンベース方向精度"""
+    actual_cum = actuals[:, :horizon].sum(dim=1)
+    pred_cum = q50[:, :horizon].sum(dim=1)
+    return ((actual_cum > 0) == (pred_cum > 0)).float().mean().item()
+
+
 # ===================================================================
 # 6. 評価 (Section 5.1)
 # ===================================================================
@@ -761,18 +780,8 @@ def evaluate(
     rmse = (diff ** 2).mean().sqrt().item()
 
     # --- 方向精度 (GPU) ---
-    # R6-01: target=log_return: 符号で方向判定 (>0 = 上昇)
-    # 1日先
-    actual_dir_1d = actuals[:, 0] > 0
-    pred_dir_1d = q50[:, 0] > 0
-    direction_acc = (actual_dir_1d == pred_dir_1d).float().mean().item()
-    # 5日先 (累積リターン: 1〜5日の合計で方向判定)
-    if actuals.size(1) >= 5:
-        actual_cum_5d = actuals[:, :5].sum(dim=1)
-        pred_cum_5d = q50[:, :5].sum(dim=1)
-        direction_acc_5d = ((actual_cum_5d > 0) == (pred_cum_5d > 0)).float().mean().item()
-    else:
-        direction_acc_5d = direction_acc
+    direction_acc = _direction_accuracy(q50, actuals, 1)
+    direction_acc_5d = _direction_accuracy(q50, actuals, 5) if actuals.size(1) >= 5 else direction_acc
 
     # --- 分位点カバレッジ: 最外分位点間 (GPU) ---
     coverage = ((actuals >= q_lo) & (actuals <= q_hi)).float().mean().item()
@@ -939,21 +948,7 @@ def walk_forward_backtest(df: pd.DataFrame, config: dict) -> dict | None:
             pred_len = min(config["MAX_PREDICTION_LENGTH"], test_window)
             training = TimeSeriesDataSet(
                 full_slice[full_slice["time_idx"] <= train_cutoff_wf],
-                time_idx="time_idx",
-                target="log_return",  # R6-01
-                group_ids=["group_id"],
-                max_encoder_length=config["MAX_ENCODER_LENGTH"],
-                min_encoder_length=config["MIN_ENCODER_LENGTH"],
-                max_prediction_length=pred_len,
-                static_categoricals=["group_id"],
-                time_varying_known_categoricals=KNOWN_CATEGORICALS,
-                time_varying_known_reals=KNOWN_REALS,
-                time_varying_unknown_categoricals=unknown_cats,
-                time_varying_unknown_reals=unknown_reals,
-                target_normalizer=EncoderNormalizer(),
-                add_relative_time_idx=True,
-                add_target_scales=True,
-                add_encoder_length=True,
+                **_tsds_kwargs(config, unknown_reals, unknown_cats, max_prediction_length=pred_len),
             )
 
             # EarlyStopping 用の検証セット (訓練期間の最後10%)
@@ -1157,15 +1152,8 @@ def main():
     q50_ens = ens_preds[:, :, q_mid].to(DEVICE)
     actuals_dev = actuals.to(DEVICE)
 
-    # R6-01: target=log_return — 符号で方向判定
-    ens_dir_1d = ((actuals_dev[:, 0] > 0) == (q50_ens[:, 0] > 0)).float().mean().item()
-    # 5日先: 累積リターン (1〜5日の合計) で方向判定
-    if actuals_dev.size(1) >= 5:
-        ens_cum_5d_act = actuals_dev[:, :5].sum(dim=1)
-        ens_cum_5d_pred = q50_ens[:, :5].sum(dim=1)
-        ens_dir_5d = ((ens_cum_5d_act > 0) == (ens_cum_5d_pred > 0)).float().mean().item()
-    else:
-        ens_dir_5d = ens_dir_1d
+    ens_dir_1d = _direction_accuracy(q50_ens, actuals_dev, 1)
+    ens_dir_5d = _direction_accuracy(q50_ens, actuals_dev, 5) if actuals_dev.size(1) >= 5 else ens_dir_1d
 
     # ── 7. テスト評価 (アンサンブル) ──
     print(f"\n=== 6. アンサンブル評価 ({n_seeds} seeds) ===")
@@ -1212,15 +1200,16 @@ def main():
         dashboard_cache.unlink()
         print(f"  Cleared: {dashboard_cache}")
 
-    _SECRET_KEYS = {"FRED_API_KEY"}
-    serializable_config = {}
-    for k, v in CONFIG.items():
-        if k in _SECRET_KEYS:
-            continue
-        if isinstance(v, (str, int, float, bool, list)) or v is None:
-            serializable_config[k] = v
+    def _serialize_config(cfg: dict) -> dict:
+        """CONFIG をシークレットを除いて JSON 直列化可能な dict に変換"""
+        _secret = {"FRED_API_KEY"}
+        return {
+            k: v for k, v in cfg.items()
+            if k not in _secret and (isinstance(v, (str, int, float, bool, list)) or v is None)
+        }
+
     with open(ARTIFACT_DIR / "tft_config.json", "w") as f:
-        json.dump(serializable_config, f, indent=2, default=str)
+        json.dump(_serialize_config(CONFIG), f, indent=2, default=str)
 
     if wf_results:
         with open(ARTIFACT_DIR / "tft_walkforward.json", "w") as f:
@@ -1249,10 +1238,7 @@ def main():
         "iteration": len(opt_log) + 1,
         "timestamp": datetime.now().isoformat(),
         "metrics": all_metrics,
-        "config_snapshot": {
-            k: v for k, v in CONFIG.items()
-            if k not in _SECRET_KEYS and (isinstance(v, (str, int, float, bool, list)) or v is None)
-        },
+        "config_snapshot": _serialize_config(CONFIG),
     }
     opt_log.append(opt_entry)
     with open(opt_log_path, "w") as f:
@@ -1261,7 +1247,6 @@ def main():
 
     # ── ダッシュボードへのモデルデプロイ ──
     if args.deploy:
-        import shutil
         deploy_dir = BASE_DIR / "dashboard" / "model"
         deploy_dir.mkdir(parents=True, exist_ok=True)
         # 既存モデルをクリア

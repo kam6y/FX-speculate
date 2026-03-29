@@ -38,7 +38,6 @@ from train_tft import (
     DirectionAwareQuantileLoss,
     prepare_data,
     create_datasets,
-    evaluate,
     backtest_trading,
 )
 from pytorch_forecasting import TemporalFusionTransformer
@@ -108,20 +107,16 @@ def ensemble_predict(
 
     ens_preds = sum_preds / len(models)
 
-    # actuals / encoder_last / prediction time_idx
-    actuals_list, enc_last_list, time_idx_list = [], [], []
+    # actuals / prediction time_idx
+    actuals_list, time_idx_list = [], []
     for x, y in dl:
         actuals_list.append(y[0].to(DEVICE, non_blocking=True))
-        if "encoder_target" in x:
-            enc_last_list.append(x["encoder_target"][:, -1].to(DEVICE, non_blocking=True))
-        # decoder_time_idx の最初の要素 = 予測開始時点
         if "decoder_time_idx" in x:
             time_idx_list.append(x["decoder_time_idx"][:, 0])
     actuals = torch.cat(actuals_list)
-    encoder_last = torch.cat(enc_last_list) if enc_last_list else None
     pred_time_idx = torch.cat(time_idx_list) if time_idx_list else torch.arange(actuals.size(0))
 
-    return ens_preds, actuals, encoder_last, pred_time_idx
+    return ens_preds, actuals, None, pred_time_idx
 
 
 # ===================================================================
@@ -181,23 +176,39 @@ def compute_full_metrics(
 
 
 # ===================================================================
+# ヘルパー
+# ===================================================================
+def _extract_1d_pnl(
+    preds: torch.Tensor, actuals: torch.Tensor, config: dict
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """1日先予測からシグナル・PnLを算出 (共通前処理)"""
+    q_mid = preds.size(2) // 2
+    pred_1d = preds[:, 0, q_mid].cpu().numpy()
+    actual_1d = actuals[:, 0].cpu().numpy()
+    cost = (config["SPREAD_PIPS"] + config["SLIPPAGE_PIPS"]) * config["PIP_SIZE"]
+    cost_lr = cost / config.get("PRICE_REFERENCE", 150.0)
+    signals = np.zeros_like(pred_1d)
+    signals[pred_1d > 0] = 1.0
+    signals[pred_1d < 0] = -1.0
+    pnl = signals * actual_1d - np.abs(signals) * cost_lr
+    return pred_1d, actual_1d, signals, pnl, cost_lr
+
+
+def _save_plot(fig, name: str):
+    """プロットを保存して閉じる"""
+    fig.tight_layout()
+    fig.savefig(EVAL_DIR / name, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  -> {name}")
+
+
+# ===================================================================
 # 可視化
 # ===================================================================
 def plot_equity_curve(preds: torch.Tensor, actuals: torch.Tensor,
                       dates: pd.DatetimeIndex, config: dict):
     """エクイティカーブ + ドローダウン"""
-    q_mid = preds.size(2) // 2
-    pred_1d = preds[:, 0, q_mid].cpu().numpy()
-    actual_1d = actuals[:, 0].cpu().numpy()
-
-    cost = (config["SPREAD_PIPS"] + config["SLIPPAGE_PIPS"]) * config["PIP_SIZE"]
-    cost_lr = cost / config.get("PRICE_REFERENCE", 150.0)
-
-    signals = np.zeros_like(pred_1d)
-    signals[pred_1d > 0] = 1.0
-    signals[pred_1d < 0] = -1.0
-
-    pnl = signals * actual_1d - np.abs(signals) * cost_lr
+    pred_1d, actual_1d, signals, pnl, cost_lr = _extract_1d_pnl(preds, actuals, config)
     cum_pnl = np.cumsum(pnl)
     running_max = np.maximum.accumulate(cum_pnl)
     drawdown = cum_pnl - running_max
@@ -228,26 +239,13 @@ def plot_equity_curve(preds: torch.Tensor, actuals: torch.Tensor,
     ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
     plt.xticks(rotation=45)
 
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_equity_curve.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_equity_curve.png")
+    _save_plot(fig, "eval_equity_curve.png")
 
 
 def plot_monthly_returns(preds: torch.Tensor, actuals: torch.Tensor,
                          dates: pd.DatetimeIndex, config: dict):
     """月次リターンヒートマップ"""
-    q_mid = preds.size(2) // 2
-    pred_1d = preds[:, 0, q_mid].cpu().numpy()
-    actual_1d = actuals[:, 0].cpu().numpy()
-
-    cost = (config["SPREAD_PIPS"] + config["SLIPPAGE_PIPS"]) * config["PIP_SIZE"]
-    cost_lr = cost / config.get("PRICE_REFERENCE", 150.0)
-
-    signals = np.zeros_like(pred_1d)
-    signals[pred_1d > 0] = 1.0
-    signals[pred_1d < 0] = -1.0
-    pnl = signals * actual_1d - np.abs(signals) * cost_lr
+    _, _, _, pnl, _ = _extract_1d_pnl(preds, actuals, config)
 
     plot_dates = dates[:len(pnl)]
     valid_mask = ~pd.isnull(plot_dates)
@@ -268,10 +266,7 @@ def plot_monthly_returns(preds: torch.Tensor, actuals: torch.Tensor,
     ax.set_title("月次リターン ヒートマップ")
     ax.set_ylabel("年")
 
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_monthly_returns.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_monthly_returns.png")
+    _save_plot(fig, "eval_monthly_returns.png")
 
 
 def plot_rolling_accuracy(preds: torch.Tensor, actuals: torch.Tensor,
@@ -304,10 +299,7 @@ def plot_rolling_accuracy(preds: torch.Tensor, actuals: torch.Tensor,
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
     plt.xticks(rotation=45)
 
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_rolling_accuracy.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_rolling_accuracy.png")
+    _save_plot(fig, "eval_rolling_accuracy.png")
 
 
 def plot_prediction_scatter(preds: torch.Tensor, actuals: torch.Tensor):
@@ -338,10 +330,7 @@ def plot_prediction_scatter(preds: torch.Tensor, actuals: torch.Tensor):
     ax.set_aspect("equal")
     ax.grid(alpha=0.3)
 
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_pred_scatter.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_pred_scatter.png")
+    _save_plot(fig, "eval_pred_scatter.png")
 
 
 def plot_quantile_fan(preds: torch.Tensor, actuals: torch.Tensor,
@@ -378,10 +367,7 @@ def plot_quantile_fan(preds: torch.Tensor, actuals: torch.Tensor,
         rotation=45,
     )
 
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_quantile_fan.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_quantile_fan.png")
+    _save_plot(fig, "eval_quantile_fan.png")
 
 
 def plot_regime_accuracy(preds: torch.Tensor, actuals: torch.Tensor,
@@ -419,10 +405,7 @@ def plot_regime_accuracy(preds: torch.Tensor, actuals: torch.Tensor,
     ax.set_xlim(0, 1)
     ax.grid(alpha=0.3, axis="x")
 
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_regime_accuracy.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_regime_accuracy.png")
+    _save_plot(fig, "eval_regime_accuracy.png")
 
 
 def plot_horizon_accuracy(preds: torch.Tensor, actuals: torch.Tensor):
@@ -458,25 +441,12 @@ def plot_horizon_accuracy(preds: torch.Tensor, actuals: torch.Tensor):
     ax.legend()
     ax.grid(alpha=0.3, axis="y")
 
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_horizon_accuracy.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_horizon_accuracy.png")
+    _save_plot(fig, "eval_horizon_accuracy.png")
 
 
 def plot_pnl_distribution(preds: torch.Tensor, actuals: torch.Tensor, config: dict):
     """日次PnL分布"""
-    q_mid = preds.size(2) // 2
-    pred_1d = preds[:, 0, q_mid].cpu().numpy()
-    actual_1d = actuals[:, 0].cpu().numpy()
-
-    cost = (config["SPREAD_PIPS"] + config["SLIPPAGE_PIPS"]) * config["PIP_SIZE"]
-    cost_lr = cost / config.get("PRICE_REFERENCE", 150.0)
-
-    signals = np.zeros_like(pred_1d)
-    signals[pred_1d > 0] = 1.0
-    signals[pred_1d < 0] = -1.0
-    pnl = signals * actual_1d - np.abs(signals) * cost_lr
+    _, _, _, pnl, _ = _extract_1d_pnl(preds, actuals, config)
 
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.hist(pnl, bins=50, color="#2196F3", alpha=0.7, edgecolor="white")
@@ -498,10 +468,7 @@ def plot_pnl_distribution(preds: torch.Tensor, actuals: torch.Tensor, config: di
     ax.legend(loc="upper left")
     ax.grid(alpha=0.3)
 
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_pnl_distribution.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_pnl_distribution.png")
+    _save_plot(fig, "eval_pnl_distribution.png")
 
 
 def plot_summary_dashboard(metrics: dict):
@@ -585,10 +552,7 @@ def plot_summary_dashboard(metrics: dict):
     axes[1, 2].axis("off")
 
     fig.suptitle("TFT USD/JPY モデル評価ダッシュボード", fontsize=16, fontweight="bold")
-    fig.tight_layout()
-    fig.savefig(EVAL_DIR / "eval_dashboard.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  -> eval_dashboard.png")
+    _save_plot(fig, "eval_dashboard.png")
 
 
 # ===================================================================

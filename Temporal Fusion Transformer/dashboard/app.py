@@ -82,6 +82,22 @@ def _start_scheduler():
     logger.info("Scheduler started: daily prediction at 17:30 JST (Mon-Fri)")
 
 
+def _save_predictions_to_db(result: dict):
+    """予測結果をDBに保存"""
+    for h in result["horizons"]:
+        db.save_prediction(
+            prediction_date=result["prediction_date"],
+            target_date=h["target_date"],
+            horizon=h["horizon"],
+            pred_lr=h["pred_log_return"],
+            pred_q10=h["q10"],
+            pred_q90=h["q90"],
+            direction=h["direction"],
+            confidence=h["confidence"],
+            current_price=result["current_price"] or 0,
+        )
+
+
 def _scheduled_predict():
     """定時推論ジョブ: 実績更新 → predict_tomorrow → DB保存 → アラートチェック"""
     logger.info("=== Scheduled job started ===")
@@ -97,18 +113,7 @@ def _scheduled_predict():
         result = predict_tomorrow()
 
         # 3. DB保存
-        for h in result["horizons"]:
-            db.save_prediction(
-                prediction_date=result["prediction_date"],
-                target_date=h["target_date"],
-                horizon=h["horizon"],
-                pred_lr=h["pred_log_return"],
-                pred_q10=h["q10"],
-                pred_q90=h["q90"],
-                direction=h["direction"],
-                confidence=h["confidence"],
-                current_price=result["current_price"] or 0,
-            )
+        _save_predictions_to_db(result)
 
         if result["horizons"]:
             h1 = result["horizons"][0]
@@ -183,18 +188,7 @@ async def api_predict():
         result = predict_tomorrow()
 
         # DBに保存
-        for h in result["horizons"]:
-            db.save_prediction(
-                prediction_date=result["prediction_date"],
-                target_date=h["target_date"],
-                horizon=h["horizon"],
-                pred_lr=h["pred_log_return"],
-                pred_q10=h["q10"],
-                pred_q90=h["q90"],
-                direction=h["direction"],
-                confidence=h["confidence"],
-                current_price=result["current_price"] or 0,
-            )
+        _save_predictions_to_db(result)
 
         # アラートチェック
         from predictor import load_saved_metrics
