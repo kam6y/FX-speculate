@@ -403,6 +403,7 @@ def get_backtest_data() -> dict:
             "win_rate": round(win_rate, 4),
             "n_trades": n_trades,
             "mae_1d": round(mae_1d, 4),
+            "pred_up_ratio_1d": round(float(np.mean(signals == 1.0)), 4),
         },
     }
 

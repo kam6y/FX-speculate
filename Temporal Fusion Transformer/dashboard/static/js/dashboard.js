@@ -128,6 +128,7 @@ function renderMetrics(m) {
         { label: "Total PnL", value: fmt(m.trade_total_pnl, 2), cls: m.trade_total_pnl > 0 ? "metric-good" : "metric-bad", tip: "テスト期間の累計損益(対数リターン合計)。正の値で利益、負の値で損失。" },
         { label: "Max Drawdown", value: fmtPct(m.trade_max_drawdown), cls: m.trade_max_drawdown > -0.1 ? "metric-warn" : "metric-bad", tip: "ピークからの最大下落率。リスク許容の目安。-10%以内が望ましい。-15%超で要警戒。" },
         { label: "MAE 1D", value: fmt(m.mae_1d || m.mae, 4), cls: "", tip: "平均絶対誤差。予測リターンと実際のリターンの平均的なずれ。小さいほど予測精度が高い。" },
+        { label: "Pred Up%", value: fmtPct(m.pred_up_ratio_1d), cls: "", tip: "テスト期間中にモデルが「上昇(UP)」と予測した割合。50%から大きく偏る場合、モデルにバイアスがある可能性。" },
     ];
     grid.innerHTML = items.map((it, i) => `
         <div class="metric-card" style="animation: fadeUp 0.4s ease ${0.05 * i}s both">
@@ -246,6 +247,7 @@ async function loadBacktest() {
                 trade_total_pnl: s.total_pnl,
                 trade_max_drawdown: s.max_drawdown,
                 mae_1d: s.mae_1d,
+                pred_up_ratio_1d: s.pred_up_ratio_1d,
             });
         } else if (metricsData) {
             renderMetrics(metricsData);

@@ -122,8 +122,15 @@ def _scheduled_predict():
                 f"(lr={h1['pred_log_return']:.6f}, conf={h1['confidence']:.2f})"
             )
 
-        # 4. アラートチェック
-        metrics = load_saved_metrics()
+        # 4. アラートチェック (バックテストデータから算出)
+        from predictor import get_backtest_data_cached
+        bt = get_backtest_data_cached()
+        s = bt.get("summary", {})
+        h1d = next((h for h in bt.get("horizon_accuracy", []) if h["horizon"] == "1D"), None)
+        metrics = {
+            "direction_accuracy": h1d["accuracy"] if h1d else s.get("win_rate", 0),
+            "trade_max_drawdown": s.get("max_drawdown", 0),
+        }
         alerts = check_alerts(metrics)
         for a in alerts:
             db.create_alert(a["type"], a["severity"], a["message"])
@@ -169,15 +176,36 @@ async def index(request: Request):
 
 @app.get("/api/metrics")
 async def api_metrics():
-    """モデルメトリクス取得"""
-    metrics = db.get_latest_metrics()
-    if not metrics:
-        try:
-            from predictor import load_saved_metrics
-            metrics = load_saved_metrics()
-        except Exception:
-            metrics = {}
-    return JSONResponse(metrics)
+    """モデルメトリクス取得 — バックテストデータから算出"""
+    try:
+        from predictor import get_backtest_data_cached
+        data = get_backtest_data_cached()
+        s = data.get("summary", {})
+        h1d = next((h for h in data.get("horizon_accuracy", []) if h["horizon"] == "1D"), None)
+        metrics = {
+            "ensemble_direction_1d": h1d["accuracy"] if h1d else s.get("win_rate"),
+            "trade_sharpe_ratio": s.get("sharpe_ratio"),
+            "trade_profit_factor": s.get("profit_factor"),
+            "trade_total_pnl": s.get("total_pnl"),
+            "trade_max_drawdown": s.get("max_drawdown"),
+            "trade_win_rate": s.get("win_rate"),
+            "trade_n_trades": s.get("n_trades"),
+            "mae_1d": s.get("mae_1d"),
+            "pred_up_ratio_1d": s.get("pred_up_ratio_1d"),
+            "direction_accuracy": h1d["accuracy"] if h1d else s.get("win_rate"),
+        }
+        return JSONResponse(metrics)
+    except Exception as e:
+        # フォールバック: DB or tft_metrics.json
+        logger.error(f"/api/metrics backtest fallback: {e}", exc_info=True)
+        metrics = db.get_latest_metrics()
+        if not metrics:
+            try:
+                from predictor import load_saved_metrics
+                metrics = load_saved_metrics()
+            except Exception:
+                metrics = {}
+        return JSONResponse(metrics)
 
 
 @app.get("/api/predict")
@@ -190,10 +218,16 @@ async def api_predict():
         # DBに保存
         _save_predictions_to_db(result)
 
-        # アラートチェック
-        from predictor import load_saved_metrics
-        metrics = load_saved_metrics()
-        alerts = check_alerts(metrics)
+        # アラートチェック (バックテストデータから算出)
+        from predictor import get_backtest_data_cached
+        bt = get_backtest_data_cached()
+        s = bt.get("summary", {})
+        h1d = next((h for h in bt.get("horizon_accuracy", []) if h["horizon"] == "1D"), None)
+        alert_metrics = {
+            "direction_accuracy": h1d["accuracy"] if h1d else s.get("win_rate", 0),
+            "trade_max_drawdown": s.get("max_drawdown", 0),
+        }
+        alerts = check_alerts(alert_metrics)
         for a in alerts:
             db.create_alert(a["type"], a["severity"], a["message"])
 
