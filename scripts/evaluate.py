@@ -81,7 +81,7 @@ def ensemble_predict(
         all_preds.append(preds)
 
     stacked = torch.stack(all_preds)  # (n_models, batch, horizon, quantiles)
-    q_mid = len(QUANTILES) // 2
+    q_mid = QUANTILES.index(0.5)
 
     result = {
         "median": stacked[:, :, :, q_mid].mean(dim=0),  # q50 平均
