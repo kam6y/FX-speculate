@@ -136,11 +136,11 @@ def find_optimal_threshold(
     if predictions.min() == predictions.max():
         return 0.0
 
-    thresholds_grid = np.linspace(predictions.min(), predictions.max(), 1000)
+    thresholds_grid = np.linspace(predictions.min(), predictions.max(), 10000)
     pred_up_matrix = predictions[None, :] > thresholds_grid[:, None]  # (1000, N)
     accuracy_vec = (pred_up_matrix == actual_up[None, :]).mean(axis=1)
     ratio_gap_vec = np.abs(actual_up_ratio - pred_up_matrix.mean(axis=1))
-    scores = accuracy_vec - 0.5 * ratio_gap_vec
+    scores = accuracy_vec - 1.0 * ratio_gap_vec
 
     return float(thresholds_grid[np.argmax(scores)])
 
