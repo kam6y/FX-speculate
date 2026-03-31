@@ -156,9 +156,8 @@ def predict_daily() -> None:
 
     # SQLite に保存
     PREDICTIONS_DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(PREDICTIONS_DB))
-    results_df.to_sql("predictions", conn, if_exists="append", index=False)
-    conn.close()
+    with sqlite3.connect(str(PREDICTIONS_DB)) as conn:
+        results_df.to_sql("predictions", conn, if_exists="append", index=False)
     print(f"\n  Saved to {PREDICTIONS_DB}")
 
 

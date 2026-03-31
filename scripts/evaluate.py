@@ -155,11 +155,13 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     tune_preds = ensemble_predict(models, tune_loader)
 
     thresholds = {}
+    # 全実績値を一度だけ収集
+    tune_actual_all = torch.stack([
+        y[0] for _, (y, _) in zip(range(len(tune_loader.dataset)), tune_loader.dataset)
+    ])
     for h in range(PREDICTION_LENGTH):
         preds_h = tune_preds["median"][:, h].numpy()
-        actuals_h = torch.stack([
-            y[0] for _, (y, _) in zip(range(len(tune_loader.dataset)), tune_loader.dataset)
-        ])[:len(preds_h), h].numpy()
+        actuals_h = tune_actual_all[:len(preds_h), h].numpy()
         thresholds[f"horizon_{h+1}"] = find_optimal_threshold(preds_h, actuals_h)
 
     print(f"  Thresholds: {thresholds}")

@@ -52,12 +52,12 @@ def compute_market_returns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_macro_features(df: pd.DataFrame) -> pd.DataFrame:
-    """マクロ経済指標に公表ラグを適用して特徴量化する。"""
+    """マクロ経済指標の特徴量化（公表ラグは fetch.py 段階で適用済み）。"""
     result = pd.DataFrame(index=df.index)
-    for name, lag in PUBLICATION_LAGS.items():
+    for name in PUBLICATION_LAGS.keys():
         col = f"fred_{name}"
         if col in df.columns:
-            result[col] = apply_publication_lag(df[col], lag)
+            result[col] = df[col]
     if "fred_us_10y" in result.columns and "fred_jp_10y" in result.columns:
         result["rate_diff"] = result["fred_us_10y"] - result["fred_jp_10y"]
     return result
