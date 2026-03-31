@@ -76,7 +76,7 @@ def train_once() -> None:
         "val_size": len(val_df),
         "tune_size": len(tune_df),
         "test_size": len(test_df),
-        "best_val_loss": float(trainer.checkpoint_callback.best_model_score),
+        "best_val_loss": float(trainer.checkpoint_callback.best_model_score) if trainer.checkpoint_callback.best_model_score is not None else float("nan"),
         "best_model_path": trainer.checkpoint_callback.best_model_path,
         "encoder_length": ENCODER_LENGTH,
         "prediction_length": PREDICTION_LENGTH,
@@ -124,7 +124,8 @@ def train_optuna(n_trials: int = 50) -> None:
         trainer = build_trainer(max_epochs=30)
         trainer.fit(tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-        return float(trainer.checkpoint_callback.best_model_score)
+        score = trainer.checkpoint_callback.best_model_score
+        return float(score) if score is not None else float("inf")
 
     study = optuna.create_study(
         direction="minimize",
