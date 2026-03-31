@@ -1,0 +1,231 @@
+"""モデル評価・可視化スクリプト。
+
+保存済みチェックポイントからモデルをロードし、テストデータで評価する。
+動的閾値チューニングも行う。
+
+Usage:
+    uv run python scripts/evaluate.py
+    uv run python scripts/evaluate.py --top-k 5
+"""
+
+import argparse
+import json
+import warnings
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import torch
+from pytorch_forecasting import TemporalFusionTransformer
+
+from config import (
+    ARTIFACT_DIR,
+    BATCH_SIZE,
+    ENCODER_LENGTH,
+    PREDICTION_LENGTH,
+    TOP_K_CHECKPOINTS,
+    QUANTILES,
+)
+from data.fetch import fetch_all_data
+from data.features import build_features
+from data.dataset import prepare_data, split_data, create_datasets
+
+warnings.filterwarnings("ignore", ".*does not have many workers.*")
+
+plt.rcParams["font.family"] = "MS Gothic"
+plt.rcParams["axes.unicode_minus"] = False
+
+EVAL_DIR = ARTIFACT_DIR / "eval"
+EVAL_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def find_best_checkpoints(top_k: int = TOP_K_CHECKPOINTS) -> list[Path]:
+    """val_loss が最小の top-k チェックポイントを返す。"""
+    ckpt_dir = ARTIFACT_DIR / "checkpoints"
+    ckpts = sorted(ckpt_dir.glob("*.ckpt"))
+    if not ckpts:
+        raise FileNotFoundError(f"No checkpoints in {ckpt_dir}")
+
+    def parse_val_loss(p: Path) -> float:
+        name = p.stem
+        for part in name.split("-"):
+            if part.startswith("val_loss="):
+                return float(part.split("=")[1])
+        return float("inf")
+
+    ckpts.sort(key=parse_val_loss)
+    return ckpts[:top_k]
+
+
+def ensemble_predict(
+    models: list[TemporalFusionTransformer],
+    dataloader,
+) -> dict:
+    """top-k モデルのアンサンブル予測。
+
+    - q50: 平均
+    - q10: 各モデルの min
+    - q90: 各モデルの max
+    """
+    all_preds = []
+    for model in models:
+        preds = model.predict(dataloader, mode="quantiles", return_x=False)
+        all_preds.append(preds)
+
+    stacked = torch.stack(all_preds)  # (n_models, batch, horizon, quantiles)
+    q_mid = len(QUANTILES) // 2
+
+    result = {
+        "median": stacked[:, :, :, q_mid].mean(dim=0),  # q50 平均
+        "q10": stacked[:, :, :, 0].min(dim=0).values,    # q10 min
+        "q90": stacked[:, :, :, -1].max(dim=0).values,   # q90 max
+    }
+    return result
+
+
+def compute_direction_metrics(
+    actual: np.ndarray,
+    predicted: np.ndarray,
+) -> dict:
+    """方向精度と方向比率メトリクスを算出する。"""
+    actual_up = (actual > 0).astype(float)
+    pred_up = (predicted > 0).astype(float)
+
+    accuracy = (actual_up == pred_up).mean()
+    actual_up_ratio = actual_up.mean()
+    pred_up_ratio = pred_up.mean()
+    ratio_gap = abs(actual_up_ratio - pred_up_ratio)
+
+    return {
+        "direction_accuracy": float(accuracy),
+        "actual_up_ratio": float(actual_up_ratio),
+        "pred_up_ratio": float(pred_up_ratio),
+        "direction_ratio_gap": float(ratio_gap),
+    }
+
+
+def find_optimal_threshold(
+    predictions: np.ndarray,
+    actuals: np.ndarray,
+) -> float:
+    """up:down 比率が実績に最も近くなる閾値を探索する。"""
+    actual_up_ratio = (actuals > 0).mean()
+    best_threshold = 0.0
+    best_gap = float("inf")
+
+    for t in np.linspace(predictions.min(), predictions.max(), 1000):
+        pred_up_ratio = (predictions > t).mean()
+        gap = abs(actual_up_ratio - pred_up_ratio)
+        if gap < best_gap:
+            best_gap = gap
+            best_threshold = t
+
+    return best_threshold
+
+
+def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
+    """テストデータでモデルを評価する。"""
+    print("=== データ準備 ===")
+    raw = fetch_all_data()
+    features = build_features(raw)
+    prepped = prepare_data(features)
+    train_df, val_df, tune_df, test_df = split_data(prepped)
+
+    training, _ = create_datasets(train_df, val_df)
+
+    print("=== モデルロード ===")
+    ckpts = find_best_checkpoints(top_k)
+    print(f"  Using {len(ckpts)} checkpoints")
+    models = [TemporalFusionTransformer.load_from_checkpoint(str(p)) for p in ckpts]
+
+    # --- 閾値チューニング (tune セットで実施) ---
+    print("=== 閾値チューニング ===")
+    tune_dataset = training.from_dataset(training, tune_df, stop_randomization=True)
+    tune_loader = tune_dataset.to_dataloader(
+        train=False, batch_size=BATCH_SIZE, num_workers=0,
+    )
+    tune_preds = ensemble_predict(models, tune_loader)
+
+    thresholds = {}
+    for h in range(PREDICTION_LENGTH):
+        preds_h = tune_preds["median"][:, h].numpy()
+        actuals_h = torch.stack([
+            y[0] for _, (y, _) in zip(range(len(tune_loader.dataset)), tune_loader.dataset)
+        ])[:len(preds_h), h].numpy()
+        thresholds[f"horizon_{h+1}"] = find_optimal_threshold(preds_h, actuals_h)
+
+    print(f"  Thresholds: {thresholds}")
+
+    # 閾値を保存
+    threshold_path = ARTIFACT_DIR / "thresholds.json"
+    with open(threshold_path, "w") as f:
+        json.dump(thresholds, f, indent=2)
+
+    # --- テストセットで評価 ---
+    print("=== テストセット評価 ===")
+    test_dataset = training.from_dataset(training, test_df, stop_randomization=True)
+    test_loader = test_dataset.to_dataloader(
+        train=False, batch_size=BATCH_SIZE, num_workers=0,
+    )
+    test_preds = ensemble_predict(models, test_loader)
+
+    report = {"thresholds": thresholds, "horizons": {}}
+
+    for h in range(PREDICTION_LENGTH):
+        preds_h = test_preds["median"][:, h].numpy()
+        actual_h_list = []
+        for _, (y, _) in zip(range(len(test_loader.dataset)), test_loader.dataset):
+            actual_h_list.append(y[0])
+        actuals_h = torch.stack(actual_h_list)[:len(preds_h), h].numpy()
+
+        mae = float(np.abs(preds_h - actuals_h).mean())
+        rmse = float(np.sqrt(((preds_h - actuals_h) ** 2).mean()))
+        threshold = thresholds[f"horizon_{h+1}"]
+        preds_thresholded = (preds_h > threshold).astype(float)
+        dir_metrics = compute_direction_metrics(actuals_h, preds_thresholded)
+
+        report["horizons"][f"horizon_{h+1}"] = {
+            "mae": mae,
+            "rmse": rmse,
+            **dir_metrics,
+        }
+        print(f"  Horizon {h+1}: MAE={mae:.6f}, RMSE={rmse:.6f}, "
+              f"DirAcc={dir_metrics['direction_accuracy']:.3f}, "
+              f"RatioGap={dir_metrics['direction_ratio_gap']:.3f}")
+
+    # --- レポート保存 ---
+    report_path = EVAL_DIR / "eval_report.json"
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
+    print(f"\n  Report saved to {report_path}")
+
+    # --- 可視化 ---
+    # 方向比率比較
+    fig, ax = plt.subplots(figsize=(10, 5))
+    horizons = list(report["horizons"].keys())
+    actual_ratios = [report["horizons"][h]["actual_up_ratio"] for h in horizons]
+    pred_ratios = [report["horizons"][h]["pred_up_ratio"] for h in horizons]
+    x = range(len(horizons))
+    ax.bar([i - 0.15 for i in x], actual_ratios, width=0.3, label="実績", alpha=0.8)
+    ax.bar([i + 0.15 for i in x], pred_ratios, width=0.3, label="予測", alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{i+1}d" for i in x])
+    ax.set_ylabel("上昇比率")
+    ax.set_title("方向比率: 実績 vs 予測")
+    ax.legend()
+    fig.savefig(EVAL_DIR / "direction_ratio.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print("  Plots saved to", EVAL_DIR)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="TFT USD/JPY 評価")
+    parser.add_argument("--top-k", type=int, default=TOP_K_CHECKPOINTS)
+    args = parser.parse_args()
+    evaluate(args.top_k)
