@@ -19,6 +19,7 @@ from config import (
     OPTUNA_DB,
     ENCODER_LENGTH,
     PREDICTION_LENGTH,
+    OUTPUT_SIZE,
 )
 from data.fetch import fetch_all_data
 from data.features import build_features
@@ -112,7 +113,7 @@ def train_optuna(n_trials: int = 50) -> None:
             hidden_size=hidden_size,
             dropout=dropout,
             hidden_continuous_size=hidden_size // 2,
-            output_size=5,
+            output_size=OUTPUT_SIZE,
             loss=DirectionAwareQuantileLoss(direction_weight=direction_weight),
             reduce_on_plateau_patience=4,
         )

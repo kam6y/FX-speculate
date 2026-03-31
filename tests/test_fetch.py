@@ -46,13 +46,14 @@ class TestFetchAllData:
     @patch("data.fetch.fetch_yahoo_data")
     @patch("data.fetch.fetch_fred_data")
     def test_returns_merged_dataframe(self, mock_fred, mock_yahoo):
-        dates = pd.bdate_range("2025-01-02", periods=10)
+        # FRED の公表ラグ (最大45日) を考慮し、十分な期間のモックデータを用意
+        dates = pd.bdate_range("2024-01-02", periods=250)
         mock_yahoo.return_value = pd.DataFrame(
-            {"Close": range(10), "Open": range(10),
-             "High": range(10), "Low": range(10), "Volume": range(10)},
+            {"Close": range(250), "Open": range(250),
+             "High": range(250), "Low": range(250), "Volume": range(250)},
             index=dates,
         )
-        mock_fred.return_value = pd.Series(range(10), index=dates)
+        mock_fred.return_value = pd.Series(range(250), index=dates)
         result = fetch_all_data(years=1, use_cache=False)
         assert isinstance(result, pd.DataFrame)
         assert len(result) > 0

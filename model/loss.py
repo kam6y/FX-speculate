@@ -51,6 +51,8 @@ class DirectionAwareQuantileLoss(QuantileLoss):
         dead_zone_mask = (target.abs() < self.dead_zone).float()
         mismatch = mismatch * (1 - dead_zone_mask)
 
-        dir_penalty = mismatch.unsqueeze(-1) * self.direction_weight
+        # 中央値分位点のみにペナルティを適用（他の分位点の意味を保持）
+        dir_penalty = torch.zeros_like(ql)
+        dir_penalty[..., q_mid] = mismatch * self.direction_weight
 
         return ql + dir_penalty

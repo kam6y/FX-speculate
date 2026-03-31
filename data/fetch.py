@@ -17,6 +17,7 @@ from config import (
     DATA_YEARS,
     YAHOO_TICKERS,
     FRED_SERIES,
+    PUBLICATION_LAGS,
     RAW_DATA_PATH,
     PROJECT_ROOT,
 )
@@ -72,10 +73,14 @@ def fetch_all_data(years: int = DATA_YEARS, use_cache: bool = True) -> pd.DataFr
             left_index=True, right_index=True, direction="backward",
         )
 
-    # FRED データ
+    # FRED データ（公表ラグを考慮してインデックスをずらしてからマージ）
     for name, series_id in FRED_SERIES.items():
         series = fetch_fred_data(series_id, years)
-        fred_df = series.to_frame(name=f"fred_{name}")
+        lag = PUBLICATION_LAGS.get(name, 0)
+        # observation_date（参照期間終端日）→ 実際の公表日へインデックスをずらす
+        shifted_index = series.index + pd.offsets.BusinessDay(lag)
+        series_lagged = pd.Series(series.values, index=shifted_index, name=f"fred_{name}")
+        fred_df = series_lagged.to_frame()
         merged = pd.merge_asof(
             merged, fred_df,
             left_index=True, right_index=True, direction="backward",

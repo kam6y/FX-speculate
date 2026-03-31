@@ -118,6 +118,9 @@ def find_optimal_threshold(
     best_threshold = 0.0
     best_gap = float("inf")
 
+    if predictions.min() == predictions.max():
+        return 0.0
+
     for t in np.linspace(predictions.min(), predictions.max(), 1000):
         pred_up_ratio = (predictions > t).mean()
         gap = abs(actual_up_ratio - pred_up_ratio)
@@ -176,12 +179,14 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
 
     report = {"thresholds": thresholds, "horizons": {}}
 
+    # 全実績値を一度だけ収集（ホライズンループの外）
+    actual_all = torch.stack([
+        y[0] for _, (y, _) in zip(range(len(test_loader.dataset)), test_loader.dataset)
+    ])
+
     for h in range(PREDICTION_LENGTH):
         preds_h = test_preds["median"][:, h].numpy()
-        actual_h_list = []
-        for _, (y, _) in zip(range(len(test_loader.dataset)), test_loader.dataset):
-            actual_h_list.append(y[0])
-        actuals_h = torch.stack(actual_h_list)[:len(preds_h), h].numpy()
+        actuals_h = actual_all[:len(preds_h), h].numpy()
 
         mae = float(np.abs(preds_h - actuals_h).mean())
         rmse = float(np.sqrt(((preds_h - actuals_h) ** 2).mean()))

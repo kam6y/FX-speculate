@@ -104,6 +104,8 @@ def predict_daily() -> None:
                 decoder_full[col] = 0.0  # unknown は decoder で不使用だが列が必要
 
     combined = pd.concat([encoder_data, decoder_full])
+    # time_idx を 0 から振り直す（training の time_idx 範囲と乖離しないよう）
+    combined["time_idx"] = range(len(combined))
 
     # predict
     print("=== モデルロード ===")

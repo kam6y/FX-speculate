@@ -30,9 +30,8 @@ def load_predictions() -> pd.DataFrame:
     if not PREDICTIONS_DB.exists():
         return pd.DataFrame()
     try:
-        conn = sqlite3.connect(str(PREDICTIONS_DB))
-        df = pd.read_sql("SELECT * FROM predictions ORDER BY prediction_date DESC, horizon ASC", conn)
-        conn.close()
+        with sqlite3.connect(str(PREDICTIONS_DB)) as conn:
+            df = pd.read_sql("SELECT * FROM predictions ORDER BY prediction_date DESC, horizon ASC", conn)
         df["target_date"] = pd.to_datetime(df["target_date"])
         df["prediction_date"] = pd.to_datetime(df["prediction_date"])
         return df

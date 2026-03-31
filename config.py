@@ -53,7 +53,7 @@ OUTPUT_SIZE = len(QUANTILES)
 
 # --- Loss ---
 DIRECTION_WEIGHT = 1.0
-SMOOTHING_TEMPERATURE = 0.1
+SMOOTHING_TEMPERATURE = 1.0  # GroupNormalizer 正規化後のスケール(std≈1)に合わせる
 DEAD_ZONE = 1e-4
 
 # --- Training ---
