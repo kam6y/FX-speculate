@@ -158,7 +158,7 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
     st.subheader("方向シグナル")
     st.caption(
         "各ホライゾン (1〜5 営業日先) の方向予測。"
-        "予測中央値が閾値を上回れば UP、下回れば DOWN と判定する。"
+        "全分位点の加重平均 (direction signal) が閾値を上回れば UP、下回れば DOWN と判定する。"
         "閾値はチューニング用データで最適化されたもの。"
     )
     if preds.empty:
@@ -174,15 +174,15 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
     for i, (_, row) in enumerate(latest.head(PREDICTION_LENGTH).iterrows()):
         direction = row.get("direction", "N/A")
         median_val = row.get("median", 0.0)
+        dir_signal = row.get("direction_signal", median_val)
         threshold = row.get("threshold", 0.0)
-        delta = median_val - threshold
 
         arrow = "↑" if direction == "UP" else "↓"
         label = f"{int(row['horizon'])}日後 ({row['target_date'].strftime('%m/%d')})"
         cols[i].metric(
             label=label,
             value=f"{arrow} {direction}",
-            delta=f"median={median_val:.5f}",
+            delta=f"signal={dir_signal:.5f}",
             delta_color="normal" if direction == "UP" else "inverse",
         )
 

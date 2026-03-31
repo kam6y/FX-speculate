@@ -5,6 +5,7 @@
 """
 
 import os
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -35,23 +36,36 @@ def fetch_yahoo_data(ticker: str, years: int = DATA_YEARS) -> pd.DataFrame:
     return df.dropna()
 
 
-def fetch_fred_data(series_id: str, years: int = DATA_YEARS) -> pd.Series:
-    """FRED API から経済指標を取得する。"""
+def fetch_fred_data(series_id: str, years: int = DATA_YEARS, max_retries: int = 3) -> pd.Series:
+    """FRED API から経済指標を取得する（リトライ付き）。"""
     api_key = os.environ.get("FRED_API_KEY", "")
     fred = Fred(api_key=api_key)
     end = date.today()
     start = end - timedelta(days=years * 365)
-    series = fred.get_series(series_id, observation_start=str(start), observation_end=str(end))
-    return series.dropna()
+    for attempt in range(max_retries):
+        try:
+            series = fred.get_series(series_id, observation_start=str(start), observation_end=str(end))
+            return series.dropna()
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 5 * (attempt + 1)
+                print(f"  FRED retry {attempt+1}/{max_retries} for {series_id} (wait {wait}s): {e}")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def fetch_all_data(years: int = DATA_YEARS, use_cache: bool = True) -> pd.DataFrame:
     """全データソースから取得し、USD/JPY の取引日ベースでマージする。"""
-    # キャッシュチェック
+    # キャッシュチェック（日付 + 行数の両方を検証）
+    min_expected_rows = years * 200  # 年間約200営業日
     if use_cache and RAW_DATA_PATH.exists():
         mtime = date.fromtimestamp(RAW_DATA_PATH.stat().st_mtime)
         if mtime == date.today():
-            return pd.read_parquet(RAW_DATA_PATH)
+            cached = pd.read_parquet(RAW_DATA_PATH)
+            if len(cached) >= min_expected_rows:
+                return cached
+            print(f"  Cache has only {len(cached)} rows (expected >= {min_expected_rows}), refetching...")
 
     # USD/JPY をマスターカレンダーとして取得
     usdjpy = fetch_yahoo_data(YAHOO_TICKERS["usdjpy"], years)

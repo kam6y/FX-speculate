@@ -28,6 +28,17 @@ def compute_technical_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
     result["bb_upper"] = bb.bollinger_hband()
     result["bb_lower"] = bb.bollinger_lband()
     result["atr"] = ta.volatility.average_true_range(high, low, close, window=14)
+
+    sma_20 = result["sma_20"]
+    result["close_sma20_ratio"] = (close - sma_20) / sma_20
+    bb_range = result["bb_upper"] - result["bb_lower"]
+    result["bb_position"] = np.where(
+        bb_range > 0, (close - result["bb_lower"]) / bb_range, 0.5
+    )
+    result["rsi_signal"] = (result["rsi_14"] - 50) / 50
+    result["momentum_5d"] = close / close.shift(5) - 1
+    result["volatility_ratio"] = result["atr"] / close
+
     return result
 
 

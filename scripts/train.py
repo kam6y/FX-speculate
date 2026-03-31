@@ -6,9 +6,12 @@ Usage:
 """
 
 import argparse
+import glob
 import json
+import os
 import warnings
 
+import lightning.pytorch as pl
 import optuna
 import torch
 from pytorch_forecasting import TemporalFusionTransformer
@@ -22,6 +25,11 @@ from config import (
     ENCODER_LENGTH,
     PREDICTION_LENGTH,
     OUTPUT_SIZE,
+    RANDOM_SEED,
+    FINETUNE_DIRECTION_WEIGHT,
+    FINETUNE_LEARNING_RATE,
+    FINETUNE_MAX_EPOCHS,
+    FINETUNE_HORIZON_WEIGHTS,
 )
 from data.fetch import fetch_all_data
 from data.features import build_features
@@ -37,6 +45,7 @@ PIN_MEMORY = DEVICE.type == "cuda"
 
 def train_once() -> None:
     """通常の学習を1回実行する。"""
+    pl.seed_everything(RANDOM_SEED, workers=True)
     print("=== データ取得 ===")
     raw = fetch_all_data()
 
@@ -67,17 +76,44 @@ def train_once() -> None:
     trainer = build_trainer()
     trainer.fit(tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-    print(f"=== 学習完了 ===")
-    print(f"  Best model: {trainer.checkpoint_callback.best_model_path}")
+    print(f"=== Stage 1 完了 ===")
+    best_stage1_path = trainer.checkpoint_callback.best_model_path
+    print(f"  Best model: {best_stage1_path}")
 
-    # 学習メタデータ保存
+    # --- Stage 2: 方向ファインチューニング ---
+    final_trainer = trainer
+    if FINETUNE_DIRECTION_WEIGHT > 0:
+        print(f"=== Stage 2: 方向ファインチューニング (dw={FINETUNE_DIRECTION_WEIGHT}) ===")
+        best_tft = TemporalFusionTransformer.load_from_checkpoint(best_stage1_path)
+
+        # Stage 1 のチェックポイントを削除（Stage 2 のみ evaluate で使用するため）
+        for old_ckpt in glob.glob(str(ARTIFACT_DIR / "checkpoints" / "*.ckpt")):
+            os.remove(old_ckpt)
+        print("  Stage 1 checkpoints cleared")
+
+        best_tft.loss = DirectionAwareQuantileLoss(
+            direction_weight=FINETUNE_DIRECTION_WEIGHT,
+            horizon_weights=FINETUNE_HORIZON_WEIGHTS,
+        )
+        best_tft.hparams.learning_rate = FINETUNE_LEARNING_RATE
+
+        final_trainer = build_trainer(max_epochs=FINETUNE_MAX_EPOCHS, early_stop_patience=5)
+        final_trainer.fit(
+            best_tft,
+            train_dataloaders=train_loader,
+            val_dataloaders=val_loader,
+        )
+        print(f"  Stage 2 Best: {final_trainer.checkpoint_callback.best_model_path}")
+
+    print(f"=== 学習完了 ===")
     meta = {
         "train_size": len(train_df),
         "val_size": len(val_df),
         "tune_size": len(tune_df),
         "test_size": len(test_df),
-        "best_val_loss": float(trainer.checkpoint_callback.best_model_score) if trainer.checkpoint_callback.best_model_score is not None else float("nan"),
-        "best_model_path": trainer.checkpoint_callback.best_model_path,
+        "best_val_loss": float(final_trainer.checkpoint_callback.best_model_score) if final_trainer.checkpoint_callback.best_model_score is not None else float("nan"),
+        "best_model_path": final_trainer.checkpoint_callback.best_model_path,
+        "stage2_applied": FINETUNE_DIRECTION_WEIGHT > 0,
         "encoder_length": ENCODER_LENGTH,
         "prediction_length": PREDICTION_LENGTH,
     }
@@ -88,7 +124,11 @@ def train_once() -> None:
 
 
 def train_optuna(n_trials: int = 50) -> None:
-    """Optuna でハイパーパラメータチューニングを行う。"""
+    """Optuna で Stage 1 のハイパーパラメータチューニングを行う。
+
+    注意: Stage 2 (方向ファインチューニング) は含まれない。
+    最適パラメータ確定後に train_once() で2段階学習を実行すること。
+    """
     print("=== データ取得 ===")
     raw = fetch_all_data()
     features = build_features(raw)

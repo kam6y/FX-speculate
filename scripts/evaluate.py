@@ -30,6 +30,7 @@ from config import (
     PREDICTION_LENGTH,
     TOP_K_CHECKPOINTS,
     QUANTILES,
+    QUANTILE_SIGNAL_WEIGHTS,
 )
 from data.fetch import fetch_all_data
 from data.features import build_features
@@ -71,9 +72,10 @@ def ensemble_predict(
 ) -> dict:
     """top-k モデルのアンサンブル予測。
 
-    - q50: 平均
+    - median: q50 平均
     - q10: 各モデルの min
     - q90: 各モデルの max
+    - direction_signal: 全分位点の加重平均（分布の歪み情報を活用）
     """
     all_preds = []
     for model in models:
@@ -83,10 +85,18 @@ def ensemble_predict(
     stacked = torch.stack(all_preds)  # (n_models, batch, horizon, quantiles)
     q_mid = QUANTILES.index(0.5)
 
+    quantile_weights = torch.tensor(QUANTILE_SIGNAL_WEIGHTS, device=stacked.device)
+    model_mean = stacked.mean(dim=0)  # (batch, horizon, quantiles)
+    direction_signal = (model_mean * quantile_weights).sum(dim=-1)
+
+    q10_idx = QUANTILES.index(0.1)
+    q90_idx = QUANTILES.index(0.9)
+
     result = {
-        "median": stacked[:, :, :, q_mid].mean(dim=0),  # q50 平均
-        "q10": stacked[:, :, :, 0].min(dim=0).values,    # q10 min
-        "q90": stacked[:, :, :, -1].max(dim=0).values,   # q90 max
+        "median": model_mean[..., q_mid],
+        "q10": stacked[:, :, :, q10_idx].min(dim=0).values,
+        "q90": stacked[:, :, :, q90_idx].max(dim=0).values,
+        "direction_signal": direction_signal,
     }
     return result
 
@@ -116,22 +126,23 @@ def find_optimal_threshold(
     predictions: np.ndarray,
     actuals: np.ndarray,
 ) -> float:
-    """up:down 比率が実績に最も近くなる閾値を探索する。"""
-    actual_up_ratio = (actuals > 0).mean()
-    best_threshold = 0.0
-    best_gap = float("inf")
+    """方向精度を最大化しつつ ratio_gap を抑える閾値を探索する。
+
+    score = accuracy - 0.5 * ratio_gap のバランスで最適化。
+    """
+    actual_up = (actuals > 0).astype(bool)
+    actual_up_ratio = actual_up.mean()
 
     if predictions.min() == predictions.max():
         return 0.0
 
-    for t in np.linspace(predictions.min(), predictions.max(), 1000):
-        pred_up_ratio = (predictions > t).mean()
-        gap = abs(actual_up_ratio - pred_up_ratio)
-        if gap < best_gap:
-            best_gap = gap
-            best_threshold = t
+    thresholds_grid = np.linspace(predictions.min(), predictions.max(), 1000)
+    pred_up_matrix = predictions[None, :] > thresholds_grid[:, None]  # (1000, N)
+    accuracy_vec = (pred_up_matrix == actual_up[None, :]).mean(axis=1)
+    ratio_gap_vec = np.abs(actual_up_ratio - pred_up_matrix.mean(axis=1))
+    scores = accuracy_vec - 0.5 * ratio_gap_vec
 
-    return best_threshold
+    return float(thresholds_grid[np.argmax(scores)])
 
 
 def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
@@ -163,7 +174,7 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
         y for (_, (y, _)) in tune_loader.dataset
     ])
     for h in range(PREDICTION_LENGTH):
-        preds_h = tune_preds["median"][:, h].numpy()
+        preds_h = tune_preds["direction_signal"][:, h].numpy()
         actuals_h = tune_actual_all[:len(preds_h), h].numpy()
         thresholds[f"horizon_{h+1}"] = float(find_optimal_threshold(preds_h, actuals_h))
 
@@ -190,13 +201,14 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     ])
 
     for h in range(PREDICTION_LENGTH):
-        preds_h = test_preds["median"][:, h].numpy()
-        actuals_h = actual_all[:len(preds_h), h].numpy()
+        median_h = test_preds["median"][:, h].numpy()
+        dir_signal_h = test_preds["direction_signal"][:, h].numpy()
+        actuals_h = actual_all[:len(median_h), h].numpy()
 
-        mae = float(np.abs(preds_h - actuals_h).mean())
-        rmse = float(np.sqrt(((preds_h - actuals_h) ** 2).mean()))
+        mae = float(np.abs(median_h - actuals_h).mean())
+        rmse = float(np.sqrt(((median_h - actuals_h) ** 2).mean()))
         threshold = thresholds[f"horizon_{h+1}"]
-        preds_thresholded = (preds_h > threshold).astype(float)
+        preds_thresholded = (dir_signal_h > threshold).astype(float)
         dir_metrics = compute_direction_metrics(actuals_h, preds_thresholded)
 
         report["horizons"][f"horizon_{h+1}"] = {

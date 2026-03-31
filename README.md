@@ -51,7 +51,7 @@ uv run python scripts/train.py --optuna --n-trials 50
 ```
 
 学習完了後、以下が生成される:
-- `artifacts/checkpoints/` — val_loss 上位3件のモデルチェックポイント
+- `artifacts/checkpoints/` — val_loss 上位5件のモデルチェックポイント
 - `artifacts/train_meta.json` — 学習メタデータ（データサイズ、ベスト val_loss 等）
 
 ### 2. 評価
@@ -218,12 +218,12 @@ Yahoo Finance + FRED API
 |------------|-------------|
 | エンコーダー長 | 60 営業日 |
 | 予測長 | 5 営業日 |
-| Hidden Size | 64 |
+| Hidden Size | 32 |
 | Attention Head Size | 4 |
-| Dropout | 0.2 |
-| Hidden Continuous Size | 32 |
+| Dropout | 0.3 |
+| Hidden Continuous Size | 16 |
 | 出力 | 5 分位点 (q10, q25, q50, q75, q90) |
-| 学習率 | 1e-3 |
+| 学習率 | 1e-4 |
 
 ### DirectionAwareQuantileLoss
 
@@ -250,10 +250,10 @@ Loss = QuantileLoss + direction_penalty
 | 設定 | 値 |
 |------|-----|
 | 最大エポック | 100 |
-| Early Stopping | val_loss 10エポック改善なしで停止 |
-| バッチサイズ | 64 |
+| Early Stopping | val_loss 20エポック改善なしで停止 |
+| バッチサイズ | 32 |
 | Gradient Clipping | 0.1 |
-| チェックポイント保存 | val_loss 上位 3 件 |
+| チェックポイント保存 | val_loss 上位 5 件 |
 | ReduceOnPlateau | patience=4 |
 
 ### アンサンブル推論

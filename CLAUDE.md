@@ -1,0 +1,19 @@
+# CLAUDE.md
+
+## 禁止事項
+
+- **RANDOM_SEED の変更は禁止**: シード変更による改善は本質的でない。モデル改善はアーキテクチャ、特徴量、損失関数等の構造的変更で行うこと。
+
+## 開発メモ
+
+### 実行方法
+```bash
+PYTHONPATH=. uv run python scripts/train.py    # 学習（2段階: Stage1 QuantileLoss → Stage2 方向FT）
+PYTHONPATH=. uv run python scripts/evaluate.py  # 評価
+PYTHONPATH=. uv run python -m pytest tests/ -v  # テスト
+```
+
+### 主要な設計判断
+- **方向シグナル**: q50 単体ではなく全5分位点の加重平均 (upper_skew: [0.05, 0.15, 0.30, 0.25, 0.25]) で方向判定。これが最大の精度改善要因。
+- **2段階学習**: Stage1 で基本予測力を習得、Stage2 で方向ペナルティによるファインチューニング。効果は +0.2pt と小さいが安定的。
+- **閾値最適化**: `accuracy - 0.5 * ratio_gap` のハイブリッドスコアで tune セット上で探索。

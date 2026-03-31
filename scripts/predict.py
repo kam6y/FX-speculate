@@ -139,13 +139,16 @@ def predict_daily() -> None:
     for h in range(PREDICTION_LENGTH):
         threshold = thresholds.get(f"horizon_{h+1}", 0.0)
         median_val = float(preds["median"][0, h])
-        direction = "UP" if median_val > threshold else "DOWN"
+        # direction_signal (全分位点の加重平均) で方向判定
+        dir_signal = float(preds["direction_signal"][0, h])
+        direction = "UP" if dir_signal > threshold else "DOWN"
 
         results.append({
             "prediction_date": str(date.today()),
             "target_date": str(future_dates[h].date()),
             "horizon": h + 1,
             "median": median_val,
+            "direction_signal": dir_signal,
             "q10": float(preds["q10"][0, h]),
             "q90": float(preds["q90"][0, h]),
             "threshold": threshold,

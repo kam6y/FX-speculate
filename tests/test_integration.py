@@ -132,8 +132,9 @@ class TestEndToEndPipeline:
         # output は dict; "prediction" キーが (batch, horizon, n_quantiles)
         prediction = output["prediction"]
         assert prediction.ndim == 3, f"expected 3-dim output, got shape {prediction.shape}"
-        assert prediction.shape[-1] == 5, (
-            f"expected 5 quantiles, got {prediction.shape[-1]}"
+        from config import OUTPUT_SIZE
+        assert prediction.shape[-1] == OUTPUT_SIZE, (
+            f"expected {OUTPUT_SIZE} quantiles, got {prediction.shape[-1]}"
         )
 
     def test_loss_backward_pass(self):

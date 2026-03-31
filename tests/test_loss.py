@@ -44,6 +44,24 @@ class TestDirectionAwareQuantileLoss:
         loss_without = loss_fn_no_dir.loss(y_pred, tiny_target).mean()
         assert abs(loss_with.item() - loss_without.item()) < 0.01
 
+    def test_horizon_weights_scale_penalty(self):
+        """horizon_weights が大きいホライゾンほどペナルティが大きい。"""
+        hw = [2.0, 1.5, 1.0, 1.0, 1.0]
+        loss_hw = DirectionAwareQuantileLoss(
+            quantiles=[0.1, 0.25, 0.5, 0.75, 0.9],
+            direction_weight=1.0,
+            smoothing_temperature=0.1,
+            dead_zone=1e-4,
+            horizon_weights=hw,
+        )
+        target = torch.tensor([[0.05, 0.05, 0.05, 0.05, 0.05]])
+        wrong = torch.zeros(1, 5, 5)
+        wrong[:, :, 2] = -0.05
+        loss_vals = loss_hw.loss(wrong, target)  # (1, 5, 5)
+        penalty_h0 = loss_vals[0, 0, 2].item()
+        penalty_h4 = loss_vals[0, 4, 2].item()
+        assert penalty_h0 > penalty_h4
+
     def test_gradient_flows(self):
         """勾配が正常に流れることを確認。"""
         y_pred = torch.randn(8, 5, 5, requires_grad=True)

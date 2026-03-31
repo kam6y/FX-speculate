@@ -14,7 +14,10 @@ from data.features import (
 class TestComputeTechnicalFeatures:
     def test_output_columns(self, sample_ohlcv):
         result = compute_technical_features(sample_ohlcv)
-        expected = {"sma_5", "sma_20", "sma_60", "rsi_14", "macd", "bb_upper", "bb_lower", "atr"}
+        expected = {
+            "sma_5", "sma_20", "sma_60", "rsi_14", "macd", "bb_upper", "bb_lower", "atr",
+            "close_sma20_ratio", "bb_position", "rsi_signal", "momentum_5d", "volatility_ratio",
+        }
         assert expected.issubset(set(result.columns))
 
     def test_no_nan_after_warmup(self, sample_ohlcv):

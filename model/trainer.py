@@ -24,13 +24,17 @@ if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
 
 
-def build_trainer(max_epochs: int = MAX_EPOCHS, fast_dev_run: bool = False) -> pl.Trainer:
+def build_trainer(
+    max_epochs: int = MAX_EPOCHS,
+    fast_dev_run: bool = False,
+    early_stop_patience: int = EARLY_STOP_PATIENCE,
+) -> pl.Trainer:
     """Lightning Trainer を構築する。"""
     ckpt_dir = ARTIFACT_DIR / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     callbacks = [
-        EarlyStopping(monitor="val_loss", patience=EARLY_STOP_PATIENCE, mode="min"),
+        EarlyStopping(monitor="val_loss", patience=early_stop_patience, mode="min"),
         LearningRateMonitor(logging_interval="epoch"),
         ModelCheckpoint(
             dirpath=str(ckpt_dir),

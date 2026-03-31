@@ -22,6 +22,8 @@ TIME_VARYING_UNKNOWN_REALS = [
     "log_return_5d", "log_return_20d",
     "sma_5", "sma_20", "sma_60",
     "rsi_14", "macd", "bb_upper", "bb_lower", "atr",
+    "close_sma20_ratio", "bb_position", "rsi_signal",
+    "momentum_5d", "volatility_ratio",
     "sp500_return", "nikkei_return", "vix_return", "oil_return", "gold_return",
     "fred_us_10y", "fred_jp_10y", "fred_ff_rate",
     "fred_cpi", "fred_unemployment", "fred_gdp", "fred_m2", "fred_dxy",
