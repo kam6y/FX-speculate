@@ -12,13 +12,6 @@ from config import PUBLICATION_LAGS
 from data.events import compute_event_features
 
 
-def apply_publication_lag(series: pd.Series, lag_days: int) -> pd.Series:
-    """公表ラグを適用する。"""
-    if lag_days <= 0:
-        return series.copy()
-    return series.shift(lag_days, freq="B").reindex(series.index)
-
-
 def compute_technical_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
     """OHLCV からテクニカル指標を算出する。"""
     close = ohlcv.get("Close", ohlcv.get("usdjpy_close"))

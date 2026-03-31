@@ -161,7 +161,7 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
         return
 
     cols = st.columns(PREDICTION_LENGTH)
-    for i, (_, row) in enumerate(latest.iterrows()):
+    for i, (_, row) in enumerate(latest.head(PREDICTION_LENGTH).iterrows()):
         direction = row.get("direction", "N/A")
         median_val = row.get("median", 0.0)
         threshold = row.get("threshold", 0.0)
@@ -224,7 +224,7 @@ def panel_event_calendar(upcoming: pd.DataFrame) -> None:
 
     display = upcoming.copy()
     display["date"] = display["date"].dt.strftime("%Y-%m-%d (%a)")
-    display.columns = ["日付", "イベント"]
+    display = display.rename(columns={"date": "日付", "event_type": "イベント"})
 
     st.dataframe(
         display,

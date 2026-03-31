@@ -82,6 +82,8 @@ def predict_daily() -> None:
     training, _ = create_datasets(train_df, val_df)
 
     # encoder_data: 最新60営業日
+    if len(prepped) < ENCODER_LENGTH:
+        raise ValueError(f"データが不足しています: {len(prepped)} < {ENCODER_LENGTH}")
     encoder_data = prepped.iloc[-ENCODER_LENGTH:]
     last_date = encoder_data.index[-1]
 

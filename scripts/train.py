@@ -15,7 +15,9 @@ from pytorch_forecasting import TemporalFusionTransformer
 
 from config import (
     ARTIFACT_DIR,
+    ATTENTION_HEAD_SIZE,
     BATCH_SIZE,
+    HIDDEN_CONTINUOUS_SIZE,
     OPTUNA_DB,
     ENCODER_LENGTH,
     PREDICTION_LENGTH,
@@ -111,8 +113,9 @@ def train_optuna(n_trials: int = 50) -> None:
             training,
             learning_rate=lr,
             hidden_size=hidden_size,
+            attention_head_size=ATTENTION_HEAD_SIZE,
             dropout=dropout,
-            hidden_continuous_size=hidden_size // 2,
+            hidden_continuous_size=HIDDEN_CONTINUOUS_SIZE,
             output_size=OUTPUT_SIZE,
             loss=DirectionAwareQuantileLoss(direction_weight=direction_weight),
             reduce_on_plateau_patience=4,

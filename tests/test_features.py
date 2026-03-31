@@ -4,27 +4,11 @@ import pandas as pd
 import numpy as np
 import pytest
 from data.features import (
-    apply_publication_lag,
     compute_technical_features,
     compute_market_returns,
     compute_calendar_features,
     build_features,
 )
-
-
-class TestApplyPublicationLag:
-    def test_shifts_values_by_lag_days(self):
-        index = pd.bdate_range("2025-01-02", periods=60)
-        series = pd.Series(range(60), index=index)
-        lagged = apply_publication_lag(series, lag_days=5)
-        assert lagged.iloc[:5].isna().all()
-        assert lagged.iloc[5] == series.iloc[0]
-
-    def test_zero_lag_returns_original(self):
-        index = pd.bdate_range("2025-01-02", periods=10)
-        series = pd.Series(range(10), index=index)
-        lagged = apply_publication_lag(series, lag_days=0)
-        pd.testing.assert_series_equal(lagged, series)
 
 
 class TestComputeTechnicalFeatures:

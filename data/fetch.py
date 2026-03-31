@@ -27,7 +27,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 def fetch_yahoo_data(ticker: str, years: int = DATA_YEARS) -> pd.DataFrame:
     """Yahoo Finance から日足データを取得する。"""
-    end = date.today()
+    end = date.today() + timedelta(days=1)  # yfinance の end は exclusive
     start = end - timedelta(days=years * 365)
     df = yf.download(ticker, start=str(start), end=str(end), progress=False)
     if isinstance(df.columns, pd.MultiIndex):
