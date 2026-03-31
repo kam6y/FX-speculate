@@ -1,5 +1,7 @@
 .env
 .vscode/
+.playwright-mcp/
+.venv/
 __pycache__
 artifacts/
 *.pyc

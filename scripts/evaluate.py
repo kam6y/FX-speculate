@@ -160,12 +160,12 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     thresholds = {}
     # 全実績値を一度だけ収集
     tune_actual_all = torch.stack([
-        y[0] for _, (y, _) in zip(range(len(tune_loader.dataset)), tune_loader.dataset)
+        y for (_, (y, _)) in tune_loader.dataset
     ])
     for h in range(PREDICTION_LENGTH):
         preds_h = tune_preds["median"][:, h].numpy()
         actuals_h = tune_actual_all[:len(preds_h), h].numpy()
-        thresholds[f"horizon_{h+1}"] = find_optimal_threshold(preds_h, actuals_h)
+        thresholds[f"horizon_{h+1}"] = float(find_optimal_threshold(preds_h, actuals_h))
 
     print(f"  Thresholds: {thresholds}")
 
@@ -186,7 +186,7 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
 
     # 全実績値を一度だけ収集（ホライズンループの外）
     actual_all = torch.stack([
-        y[0] for _, (y, _) in zip(range(len(test_loader.dataset)), test_loader.dataset)
+        y for (_, (y, _)) in test_loader.dataset
     ])
 
     for h in range(PREDICTION_LENGTH):
@@ -213,6 +213,52 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\n  Report saved to {report_path}")
+
+    # --- 特徴量重要度 & Attention 重み保存 ---
+    print("=== 特徴量重要度・Attention 抽出 ===")
+    best_model = models[0]
+    raw_out = best_model.predict(test_loader, mode="raw", return_x=True)
+    interpretation = best_model.interpret_output(raw_out.output, reduction="mean")
+
+    # 特徴量重要度: encoder_variables を保存
+    figs = best_model.plot_interpretation(interpretation)
+    enc_ax = figs["encoder_variables"].get_axes()[0]
+    enc_names = [t.get_text() for t in enc_ax.get_yticklabels()]
+    enc_values = [bar.get_width() for bar in enc_ax.patches]
+    feature_importance = dict(zip(enc_names, enc_values))
+    plt.close("all")
+
+    importance_path = ARTIFACT_DIR / "feature_importance.json"
+    with open(importance_path, "w") as f:
+        json.dump(feature_importance, f, indent=2)
+    print(f"  Feature importance saved to {importance_path}")
+
+    # Attention 重み: 各ホライゾンごとの attention を 2D 行列で保存
+    # 各ホライゾンは encoder + 前の decoder step に attend するため長さが異なる
+    # 最大長に合わせてゼロパディングし、ステップラベルも対応させる
+    decoder_steps = [f"t+{h+1}" for h in range(PREDICTION_LENGTH)]
+    max_len = ENCODER_LENGTH + PREDICTION_LENGTH - 1  # 最後のホライゾンの長さ
+    step_labels = [f"t-{ENCODER_LENGTH - i}" for i in range(ENCODER_LENGTH)]
+    step_labels += [f"t+{h+1}" for h in range(PREDICTION_LENGTH - 1)]
+
+    attn_rows = []
+    for h in range(PREDICTION_LENGTH):
+        interp_h = best_model.interpret_output(raw_out.output, reduction="mean", attention_prediction_horizon=h)
+        row = interp_h["attention"].tolist()
+        # 最大長に合わせてゼロパディング
+        row += [0.0] * (max_len - len(row))
+        attn_rows.append(row)
+
+    attn_data = {
+        "weights": attn_rows,
+        "encoder_steps": step_labels,
+        "decoder_steps": decoder_steps,
+    }
+
+    attn_path = ARTIFACT_DIR / "attention_weights.json"
+    with open(attn_path, "w") as f:
+        json.dump(attn_data, f, indent=2)
+    print(f"  Attention weights saved to {attn_path}")
 
     # --- 可視化 ---
     # 方向比率比較

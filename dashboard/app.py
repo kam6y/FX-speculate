@@ -97,6 +97,11 @@ def _get_latest_predictions(df: pd.DataFrame) -> pd.DataFrame:
 def panel_prediction_chart(preds: pd.DataFrame) -> None:
     """予測チャート: ファンチャート付き。"""
     st.subheader("予測チャート")
+    st.caption(
+        "TFT モデルによる USD/JPY の対数リターン予測。"
+        "青線が中央値 (q50)、薄い帯が 90% 信頼区間 (q10–q90) を示す。"
+        "帯が広いほど予測の不確実性が高い。"
+    )
     if preds.empty:
         st.info("データがありません。scripts/predict.py を実行してください。")
         return
@@ -151,6 +156,11 @@ def panel_prediction_chart(preds: pd.DataFrame) -> None:
 def panel_direction_signals(preds: pd.DataFrame) -> None:
     """方向シグナル: ホライゾン別 UP/DOWN を st.metric で表示。"""
     st.subheader("方向シグナル")
+    st.caption(
+        "各ホライゾン (1〜5 営業日先) の方向予測。"
+        "予測中央値が閾値を上回れば UP、下回れば DOWN と判定する。"
+        "閾値はチューニング用データで最適化されたもの。"
+    )
     if preds.empty:
         st.info("データがありません。")
         return
@@ -180,6 +190,11 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
 def panel_direction_ratio(report: dict) -> None:
     """方向比率モニター: 実績 vs 予測 up 比率の棒グラフ。"""
     st.subheader("方向比率モニター (実績 vs 予測)")
+    st.caption(
+        "テストセットにおける実績と予測の上昇比率を比較。"
+        "両者が近いほどモデルのキャリブレーションが良好。"
+        "大きな乖離はモデルが偏った予測をしている兆候。"
+    )
     if not report or "horizons" not in report:
         st.info("データがありません。scripts/evaluate.py を実行してください。")
         return
@@ -218,6 +233,10 @@ def panel_direction_ratio(report: dict) -> None:
 def panel_event_calendar(upcoming: pd.DataFrame) -> None:
     """イベントカレンダー: 直近の経済イベント一覧。"""
     st.subheader("イベントカレンダー (直近30日)")
+    st.caption(
+        "FOMC・BOJ・雇用統計 (NFP)・CPI など為替に影響する主要経済イベント。"
+        "イベント前後はボラティリティが高まりやすく、予測の信頼区間が広がる傾向がある。"
+    )
     if upcoming.empty:
         st.info("直近30日以内に主要イベントはありません。")
         return
@@ -237,6 +256,11 @@ def panel_event_calendar(upcoming: pd.DataFrame) -> None:
 def panel_feature_importance() -> None:
     """特徴量重要度: TFT VSN から読み込み。"""
     st.subheader("特徴量重要度 (Variable Selection Network)")
+    st.caption(
+        "TFT 内部の Variable Selection Network が各入力特徴量に割り当てた重要度。"
+        "スコアが高い特徴量ほどモデルの予測に強く寄与している。"
+        "テクニカル・マクロ・イベント系のどの情報が効いているか把握できる。"
+    )
 
     importance_path = ARTIFACT_DIR / "feature_importance.json"
     if not importance_path.exists():
@@ -276,6 +300,11 @@ def panel_feature_importance() -> None:
 def panel_attention_heatmap() -> None:
     """Attention ヒートマップ: 時系列 attention 重みを表示。"""
     st.subheader("Attention ヒートマップ")
+    st.caption(
+        "各予測ホライゾン (縦軸) がエンコーダーのどの時点 (横軸) に注目しているかを可視化。"
+        "濃い色ほど注目度が高い。直近の時点に集中していれば短期情報重視、"
+        "分散していれば長期パターンも活用していることを意味する。"
+    )
 
     attn_path = ARTIFACT_DIR / "attention_weights.json"
     if not attn_path.exists():
@@ -320,6 +349,11 @@ def panel_attention_heatmap() -> None:
 def panel_accuracy_history(report: dict) -> None:
     """過去予測の精度: eval レポートからメトリクスを表示。"""
     st.subheader("過去予測の精度 (テストセット)")
+    st.caption(
+        "テストセットでの評価結果。MAE/RMSE は予測誤差の大きさ、方向精度は上昇/下降の的中率。"
+        "方向精度が 50% (ランダム基準) を安定的に上回っているかが重要な判断材料。"
+        "実績 UP 比率と予測 UP 比率の乖離 (比率ギャップ) が小さいほどキャリブレーションが良好。"
+    )
     if not report or "horizons" not in report:
         st.info("データがありません。scripts/evaluate.py を実行してください。")
         return
