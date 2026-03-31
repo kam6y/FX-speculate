@@ -73,7 +73,7 @@ assert len(FINETUNE_HORIZON_WEIGHTS) == PREDICTION_LENGTH, (
 )
 
 # --- Inference ---
-QUANTILE_SIGNAL_WEIGHTS = [0.05, 0.15, 0.30, 0.25, 0.25]  # 上位テール重みで方向シグナル強化
+QUANTILE_SIGNAL_WEIGHTS = [0.05, 0.10, 0.25, 0.30, 0.30]  # q75+q90強化で方向シグナル改善
 assert len(QUANTILE_SIGNAL_WEIGHTS) == len(QUANTILES), (
     f"QUANTILE_SIGNAL_WEIGHTS length {len(QUANTILE_SIGNAL_WEIGHTS)} "
     f"must match QUANTILES length {len(QUANTILES)}"
