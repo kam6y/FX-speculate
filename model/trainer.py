@@ -34,7 +34,8 @@ def build_trainer(max_epochs: int = MAX_EPOCHS, fast_dev_run: bool = False) -> p
         LearningRateMonitor(logging_interval="epoch"),
         ModelCheckpoint(
             dirpath=str(ckpt_dir),
-            filename="tft-{epoch:02d}-{val_loss:.4f}",
+            filename="tft-epoch={epoch:02d}-val_loss={val_loss:.4f}",
+            auto_insert_metric_name=False,
             monitor="val_loss",
             mode="min",
             save_top_k=TOP_K_CHECKPOINTS,
