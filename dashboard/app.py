@@ -226,11 +226,6 @@ def panel_event_calendar(upcoming: pd.DataFrame) -> None:
     display["date"] = display["date"].dt.strftime("%Y-%m-%d (%a)")
     display.columns = ["日付", "イベント"]
 
-    # カラーバッジ付きで表示
-    def color_event(row):
-        color = EVENT_COLOR.get(row["イベント"], "#888888")
-        return [f"color: {color}; font-weight: bold" if c == "イベント" else "" for c in display.columns]
-
     st.dataframe(
         display,
         use_container_width=True,

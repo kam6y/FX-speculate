@@ -15,7 +15,7 @@ from data.events import compute_event_features
 def apply_publication_lag(series: pd.Series, lag_days: int) -> pd.Series:
     """公表ラグを適用する。"""
     if lag_days <= 0:
-        return series
+        return series.copy()
     return series.shift(lag_days, freq="B").reindex(series.index)
 
 

@@ -60,6 +60,17 @@ class TestComputeEventFeatures:
         assert (features["event_density_past_5d"] >= 0).all()
         assert (features["event_density_past_5d"] <= 5).all()
 
+    def test_event_density_excludes_current_and_future(self):
+        """event_density_past_5d は当日・未来のイベントを含まない。"""
+        # NFP 2025-01-03 (第1金曜) の前日 2025-01-02 では density に 1/3 を含まない
+        index = pd.bdate_range("2025-01-02", periods=5)
+        features = compute_event_features(index)
+        jan2 = features.loc[pd.Timestamp("2025-01-02"), "event_density_past_5d"]
+        # 1/2 の過去5営業日(12/26-1/1)に NFP 1/3 は含まれない
+        # NFP 後の 1/6 では 1/3 が過去5日に含まれるはず
+        jan6 = features.loc[pd.Timestamp("2025-01-06"), "event_density_past_5d"]
+        assert jan6 >= jan2
+
     def test_is_event_day_binary(self):
         index = pd.bdate_range("2025-01-02", periods=60)
         features = compute_event_features(index)

@@ -40,7 +40,7 @@ class DirectionAwareQuantileLoss(QuantileLoss):
         if self.direction_weight <= 0:
             return ql
 
-        q_mid = y_pred.size(-1) // 2
+        q_mid = list(self.quantiles).index(0.5)
         pred_median = y_pred[..., q_mid]
 
         pred_dir = torch.tanh(pred_median / self.smoothing_temperature)

@@ -55,7 +55,10 @@ def find_best_checkpoints(top_k: int = TOP_K_CHECKPOINTS) -> list[Path]:
         name = p.stem
         for part in name.split("-"):
             if part.startswith("val_loss="):
-                return float(part.split("=")[1])
+                try:
+                    return float(part.split("=")[1])
+                except ValueError:
+                    continue
         return float("inf")
 
     ckpts.sort(key=parse_val_loss)

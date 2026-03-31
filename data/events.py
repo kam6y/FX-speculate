@@ -134,50 +134,51 @@ def compute_event_features(index: pd.DatetimeIndex) -> pd.DataFrame:
     start_year = index.min().year - 1
     end_year = index.max().year + 1
     all_events = _get_events_for_range(start_year, end_year)
-    event_dates = all_events["date"].values
+    event_dates_arr = all_events["date"].values.astype("datetime64[D]")
+    event_types_arr = all_events["event_type"].values
+    index_arr = index.values.astype("datetime64[D]")
+    event_dates_set = set(event_dates_arr)
 
-    results = []
-    for d in index:
-        d_ts = pd.Timestamp(d)
+    # searchsorted でベクトル化（O(N log E)）
+    # days_to_next: 各日付から次のイベントまでの営業日数
+    next_idx = np.searchsorted(event_dates_arr, index_arr, side="left")
+    # days_from_last: 各日付から直近の過去イベントまでの営業日数
+    prev_idx = np.searchsorted(event_dates_arr, index_arr, side="right") - 1
 
-        # days_to_next_major_event
-        future = all_events[all_events["date"] >= d_ts]
-        if len(future) > 0:
-            next_event_date = future.iloc[0]["date"]
-            next_event_type = future.iloc[0]["event_type"]
-            days_to = np.busday_count(
-                d_ts.date(), pd.Timestamp(next_event_date).date()
-            )
+    days_to_list = []
+    days_from_list = []
+    event_type_next_list = []
+
+    for i, d in enumerate(index_arr):
+        ni = next_idx[i]
+        if ni < len(event_dates_arr):
+            days_to_list.append(max(int(np.busday_count(d, event_dates_arr[ni])), 0))
+            event_type_next_list.append(event_types_arr[ni])
         else:
-            days_to = 30
-            next_event_type = "NONE"
+            days_to_list.append(30)
+            event_type_next_list.append("NONE")
 
-        # days_from_last_major_event
-        past = all_events[all_events["date"] <= d_ts]
-        if len(past) > 0:
-            last_event_date = past.iloc[-1]["date"]
-            days_from = np.busday_count(
-                pd.Timestamp(last_event_date).date(), d_ts.date()
-            )
+        pi = prev_idx[i]
+        if pi >= 0:
+            days_from_list.append(max(int(np.busday_count(event_dates_arr[pi], d)), 0))
         else:
-            days_from = 30
+            days_from_list.append(30)
 
-        # is_event_day
-        is_event = int(d_ts.normalize() in set(pd.DatetimeIndex(event_dates).normalize()))
+    # is_event_day: セット検索 O(N)
+    is_event_list = [int(d in event_dates_set) for d in index_arr]
 
-        # event_density_past_5d: t-5d 〜 t-1d のイベント数
-        past_5d_start = d_ts - pd.offsets.BDay(5)
-        past_5d_events = all_events[
-            (all_events["date"] >= past_5d_start) & (all_events["date"] < d_ts)
-        ]
-        density = len(past_5d_events)
+    # event_density_past_5d: 各日の過去5営業日のイベント数
+    density_list = []
+    for i, d in enumerate(index_arr):
+        past_5d_start = (pd.Timestamp(d) - pd.offsets.BDay(5)).asm8.astype("datetime64[D]")
+        left = np.searchsorted(event_dates_arr, past_5d_start, side="left")
+        right = np.searchsorted(event_dates_arr, d, side="left")
+        density_list.append(right - left)
 
-        results.append({
-            "days_to_next_major_event": max(days_to, 0),
-            "days_from_last_major_event": max(days_from, 0),
-            "event_type_next": next_event_type,
-            "is_event_day": is_event,
-            "event_density_past_5d": density,
-        })
-
-    return pd.DataFrame(results, index=index)
+    return pd.DataFrame({
+        "days_to_next_major_event": days_to_list,
+        "days_from_last_major_event": days_from_list,
+        "event_type_next": event_type_next_list,
+        "is_event_day": is_event_list,
+        "event_density_past_5d": density_list,
+    }, index=index)
