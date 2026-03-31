@@ -1,3 +1,7 @@
 .env
 .vscode/
 __pycache__
+artifacts/
+*.pyc
+.pytest_cache/
+lightning_logs/

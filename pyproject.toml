@@ -1,0 +1,23 @@
+[project]
+name = "fx-speculate"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pytorch-forecasting>=1.0",
+    "lightning>=2.0",
+    "torch>=2.0",
+    "yfinance>=0.2",
+    "fredapi>=0.5",
+    "python-dotenv>=1.0",
+    "ta>=0.11",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "seaborn>=0.13",
+    "optuna>=3.0",
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=4.0"]
