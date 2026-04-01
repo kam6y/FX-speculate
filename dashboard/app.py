@@ -53,9 +53,9 @@ def load_eval_report() -> dict:
 
 
 @st.cache_data(ttl=3600)
-def load_upcoming_events(days_ahead: int = 30) -> pd.DataFrame:
+def load_upcoming_events(today_str: str, days_ahead: int = 30) -> pd.DataFrame:
     """今日から days_ahead 日以内の経済イベントを返す。"""
-    today = pd.Timestamp.today().normalize()
+    today = pd.Timestamp(today_str)
     cutoff = today + pd.Timedelta(days=days_ahead)
 
     years = sorted({today.year, cutoff.year})
@@ -177,13 +177,18 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
         dir_signal = row.get("direction_signal", median_val)
         threshold = row.get("threshold", 0.0)
 
-        arrow = "↑" if direction == "UP" else "↓"
+        if direction == "UP":
+            arrow, delta_color = "↑", "normal"
+        elif direction == "DOWN":
+            arrow, delta_color = "↓", "inverse"
+        else:
+            arrow, delta_color = "－", "off"
         label = f"{int(row['horizon'])}日後 ({row['target_date'].strftime('%m/%d')})"
         cols[i].metric(
             label=label,
             value=f"{arrow} {direction}",
             delta=f"signal={dir_signal:.5f}",
-            delta_color="normal" if direction == "UP" else "inverse",
+            delta_color=delta_color,
         )
 
 
@@ -360,13 +365,16 @@ def panel_accuracy_history(report: dict) -> None:
 
     horizons = report["horizons"]
     rows = []
+    accuracies_raw = []
     for h_key, metrics in horizons.items():
         h_num = int(h_key.split("_")[1])
+        dir_acc = metrics.get('direction_accuracy', float('nan'))
+        accuracies_raw.append(dir_acc)
         rows.append({
             "ホライゾン": f"{h_num}日後",
             "MAE": f"{metrics.get('mae', float('nan')):.6f}",
             "RMSE": f"{metrics.get('rmse', float('nan')):.6f}",
-            "方向精度": f"{metrics.get('direction_accuracy', float('nan')):.1%}",
+            "方向精度": f"{dir_acc:.1%}",
             "実績UP比率": f"{metrics.get('actual_up_ratio', float('nan')):.1%}",
             "予測UP比率": f"{metrics.get('pred_up_ratio', float('nan')):.1%}",
             "比率ギャップ": f"{metrics.get('direction_ratio_gap', float('nan')):.1%}",
@@ -376,7 +384,7 @@ def panel_accuracy_history(report: dict) -> None:
     st.dataframe(df_report, use_container_width=True, hide_index=True)
 
     # 方向精度の折れ線グラフ
-    accuracies = [float(r["方向精度"].rstrip("%")) / 100 for r in rows]
+    accuracies = accuracies_raw
     h_labels = [r["ホライゾン"] for r in rows]
 
     fig = go.Figure(go.Scatter(
@@ -407,7 +415,8 @@ def main() -> None:
     # データロード
     preds_df = load_predictions()
     eval_report = load_eval_report()
-    upcoming_events = load_upcoming_events(days_ahead=30)
+    today_str = pd.Timestamp.today().normalize().isoformat()
+    upcoming_events = load_upcoming_events(today_str, days_ahead=30)
 
     # --- 上段: 予測チャート + 方向シグナル ---
     panel_prediction_chart(preds_df)
