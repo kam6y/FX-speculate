@@ -17,7 +17,7 @@ class TestBuildTft:
         import numpy as np
         from data.dataset import prepare_data, create_datasets
 
-        n = 300
+        n = 500
         index = pd.bdate_range("2024-01-02", periods=n)
         df = pd.DataFrame({
             "log_return": np.random.randn(n) * 0.01,
@@ -32,6 +32,6 @@ class TestBuildTft:
             "event_density_past_5d": np.random.randint(0, 3, n),
         }, index=index)
         prepped = prepare_data(df)
-        training, _ = create_datasets(prepped.iloc[:230], prepped.iloc[230:])
+        training, _ = create_datasets(prepped.iloc[:380], prepped.iloc[380:])
         tft = build_tft(training)
         assert tft is not None

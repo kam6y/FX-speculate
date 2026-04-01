@@ -86,10 +86,8 @@ def train_once() -> None:
         print(f"=== Stage 2: 方向ファインチューニング (dw={FINETUNE_DIRECTION_WEIGHT}) ===")
         best_tft = TemporalFusionTransformer.load_from_checkpoint(best_stage1_path)
 
-        # Stage 1 のチェックポイントを削除（Stage 2 のみ evaluate で使用するため）
-        for old_ckpt in glob.glob(str(ARTIFACT_DIR / "checkpoints" / "*.ckpt")):
-            os.remove(old_ckpt)
-        print("  Stage 1 checkpoints cleared")
+        # Stage 1 チェックポイントを保持（アンサンブル多様性のため）
+        print("  Stage 1 checkpoints retained for ensemble diversity")
 
         best_tft.loss = DirectionAwareQuantileLoss(
             direction_weight=FINETUNE_DIRECTION_WEIGHT,

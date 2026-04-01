@@ -98,7 +98,7 @@ class TestEndToEndPipeline:
 
     def test_dataset_creation(self):
         """prepare_data -> split_data -> create_datasets が非空データセットを返す。"""
-        features = _make_synthetic_features(n=500)
+        features = _make_synthetic_features(n=800)
         prepped = prepare_data(features)
         train, val, tune, test = split_data(prepped)
 
@@ -112,7 +112,7 @@ class TestEndToEndPipeline:
 
     def test_model_forward_pass(self):
         """TFT がフォワードパスを実行でき、出力が 5 分位数を持つ。"""
-        features = _make_synthetic_features(n=500)
+        features = _make_synthetic_features(n=800)
         prepped = prepare_data(features)
         train, val, _tune, _test = split_data(prepped)
 
@@ -139,7 +139,7 @@ class TestEndToEndPipeline:
 
     def test_loss_backward_pass(self):
         """損失計算と勾配フローが正常に動作する。"""
-        features = _make_synthetic_features(n=500)
+        features = _make_synthetic_features(n=800)
         prepped = prepare_data(features)
         train, val, _tune, _test = split_data(prepped)
 
