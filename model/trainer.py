@@ -10,6 +10,7 @@ from config import (
     MAX_EPOCHS,
     EARLY_STOP_PATIENCE,
     LEARNING_RATE,
+    GRADIENT_CLIP_VAL,
     HIDDEN_SIZE,
     ATTENTION_HEAD_SIZE,
     DROPOUT,
@@ -50,7 +51,7 @@ def build_trainer(
         max_epochs=max_epochs,
         accelerator="auto",
         callbacks=callbacks,
-        gradient_clip_val=0.1,
+        gradient_clip_val=GRADIENT_CLIP_VAL,
         fast_dev_run=fast_dev_run,
         enable_progress_bar=True,
     )
