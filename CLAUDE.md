@@ -19,5 +19,7 @@ PYTHONPATH=. uv run python -m pytest tests/ -v  # テスト
 - **閾値最適化**: `accuracy - 1.0 * ratio_gap` のハイブリッドスコアで tune セット上で 10000 グリッドで探索。ratio_gap ペナルティを強くすることでキャリブレーションと精度の両方が改善。
 - **ドロップアウト**: 0.15 が最適。0.3 では小さいモデル（hidden_size=32）に対して過正則化。0.10 では過学習。
 - **エンコーダ長**: 90営業日が最適。60→90でH2-H5の方向精度が改善。110以上はtuneセット（124サンプル）のウィンドウ数不足で閾値最適化が破綻。
-- **学習率**: 5e-5 が encoder=90 での最適値。1e-4 では過大、3e-5 では収束が遅すぎ。
+- **学習率**: 7e-5 が encoder=90 での最適値。5e-5 から +0.3pt 改善。1e-4 では過大、3e-5 では収束が遅すぎ。
 - **Stage 2 (方向FT)**: encoder=90 ではStage2無効化（direction_weight=0.0）が最良。Stage2はepoch 0で停止し実質的に機能しない。
+- **特徴量の安定性**: 現在の特徴量セットは最適化済み。追加（VIX term structure, cross-market lead-lag, COT）も削除（低重要度5特徴量）も方向精度を大幅に悪化させる。TFT の encoder が時系列パターンを自己学習するため、ラグ特徴量や移動平均の派生は冗長でノイズになる。
+- **モデルサイズの安定性**: hidden_size=32 が最適。48, 64 では方向精度が50%以下に悪化。ATTENTION_HEAD_SIZE=4, HIDDEN_CONTINUOUS_SIZE=16 も同様に最適。
