@@ -21,5 +21,6 @@ PYTHONPATH=. uv run python -m pytest tests/ -v  # テスト
 - **エンコーダ長**: 90営業日が最適。60→90でH2-H5の方向精度が改善。110以上はtuneセット（124サンプル）のウィンドウ数不足で閾値最適化が破綻。
 - **学習率**: 7e-5 が encoder=90 での最適値。5e-5 から +0.3pt 改善。1e-4 では過大、3e-5 では収束が遅すぎ。
 - **Stage 2 (方向FT)**: encoder=90 ではStage2無効化（direction_weight=0.0）が最良。Stage2はepoch 0で停止し実質的に機能しない。
+- **方向ペナルティの温度**: SMOOTHING_TEMPERATURE=2.0 では log_return（~0.003）に対して tanh が線形領域になり、方向ペナルティが定数化して勾配に寄与しない。temp=0.005 で機能するが、dw=0.01 が最適で平均精度はdw=0.0と同等（H4/H5は改善するがH2が悪化）。
 - **特徴量の安定性**: 現在の特徴量セットは最適化済み。追加（VIX term structure, cross-market lead-lag, COT）も削除（低重要度5特徴量）も方向精度を大幅に悪化させる。TFT の encoder が時系列パターンを自己学習するため、ラグ特徴量や移動平均の派生は冗長でノイズになる。
 - **モデルサイズの安定性**: hidden_size=32 が最適。48, 64 では方向精度が50%以下に悪化。ATTENTION_HEAD_SIZE=4, HIDDEN_CONTINUOUS_SIZE=16 も同様に最適。
