@@ -59,7 +59,7 @@ DEAD_ZONE = 1e-4
 # --- Training ---
 MAX_EPOCHS = 100
 EARLY_STOP_PATIENCE = 20
-LEARNING_RATE = 5e-5
+LEARNING_RATE = 7e-5
 BATCH_SIZE = 32
 
 # --- Stage 2: 方向ファインチューニング ---
