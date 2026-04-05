@@ -24,3 +24,4 @@ PYTHONPATH=. uv run python -m pytest tests/ -v  # テスト
 - **方向ペナルティの温度**: SMOOTHING_TEMPERATURE=2.0 では log_return（~0.003）に対して tanh が線形領域になり、方向ペナルティが定数化して勾配に寄与しない。temp=0.005 で機能するが、dw=0.01 が最適で平均精度はdw=0.0と同等（H4/H5は改善するがH2が悪化）。
 - **特徴量の安定性**: 現在の特徴量セットは最適化済み。追加（VIX term structure, cross-market lead-lag, COT）も削除（低重要度5特徴量）も方向精度を大幅に悪化させる。TFT の encoder が時系列パターンを自己学習するため、ラグ特徴量や移動平均の派生は冗長でノイズになる。
 - **モデルサイズの安定性**: hidden_size=32 が最適。48, 64 では方向精度が50%以下に悪化。ATTENTION_HEAD_SIZE=4, HIDDEN_CONTINUOUS_SIZE=16 も同様に最適。
+- **バッチサイズ**: 16 が最適。32→16 で平均方向精度 +0.8pt 改善（特にH1が+2.5pt）。小バッチのノイジーな勾配が暗黙の正則化として機能。64では悪化。gradient_clip_val（0.1/0.3/0.5）と reduce_on_plateau_patience（4/6/8）は結果に影響なし。
