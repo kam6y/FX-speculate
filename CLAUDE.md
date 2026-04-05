@@ -27,3 +27,4 @@ PYTHONPATH=. uv run python -m pytest tests/ -v  # テスト
 - **バッチサイズ**: 16 が最適。32→16 で平均方向精度 +0.8pt 改善（特にH1が+2.5pt）。小バッチのノイジーな勾配が暗黙の正則化として機能。64では悪化。gradient_clip_val（0.1/0.3/0.5）と reduce_on_plateau_patience（4/6/8）は結果に影響なし。
 - **Weight decay は禁止**: Adam + weight_decay は 1e-4 でも方向精度が 50% 以下に崩壊（適応的学習率との干渉）。AdamW + weight_decay は無害だが改善もなし。現行の Adam, weight_decay=0 が最適。
 - **accumulate_grad_batches は禁止**: accum=2 で -0.64pt、accum=4 で -1.70pt。batch_size=16 の暗黙正則化効果を損なう。EARLY_STOP_PATIENCE（10/15/20）は結果に影響なし。
+- **Magnitude-weighted loss は禁止**: QuantileLoss にターゲット絶対値の重み付けを加えると、キャリブレーションが崩壊（ratio_gap 30-40%、精度50%付近に低下）。QuantileLoss は均等重み付けでのみ正常に機能する。
