@@ -7,3 +7,4 @@ artifacts/
 *.pyc
 .pytest_cache/
 lightning_logs/
+logs/
