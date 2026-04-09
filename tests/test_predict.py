@@ -1,7 +1,6 @@
 """predict.py の backfill ロジックのテスト。"""
 
 import sqlite3
-from datetime import date
 
 import numpy as np
 import pandas as pd
