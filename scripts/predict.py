@@ -40,6 +40,65 @@ from scripts.evaluate import find_best_checkpoints, ensemble_predict
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
 
+def migrate_db(db_path) -> None:
+    """predictions テーブルに actual 系カラムを idempotent に追加する。"""
+    with sqlite3.connect(str(db_path)) as conn:
+        existing = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(predictions)").fetchall()
+        }
+        for col, col_type in [
+            ("actual_return", "REAL"),
+            ("actual_direction", "TEXT"),
+            ("is_correct", "INTEGER"),
+        ]:
+            if col not in existing:
+                conn.execute(
+                    f"ALTER TABLE predictions ADD COLUMN {col} {col_type}"
+                )
+
+
+def backfill_actuals(db_path, price_series: pd.Series) -> None:
+    """過去予測に実績リターンを書き戻す。
+
+    Args:
+        db_path: predictions.db のパス
+        price_series: 日付インデックスの USD/JPY 終値 Series
+    """
+    today_str = str(date.today())
+
+    with sqlite3.connect(str(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT rowid, prediction_date, target_date, direction "
+            "FROM predictions "
+            "WHERE actual_return IS NULL AND target_date <= ?",
+            (today_str,),
+        ).fetchall()
+
+        # price_series のインデックスを文字列キーでも引けるよう正規化
+        price_index = {
+            str(dt.date()) if hasattr(dt, "date") else str(dt): price
+            for dt, price in price_series.items()
+        }
+
+        for rowid, pred_date, tgt_date, direction in rows:
+            close_pred = price_index.get(pred_date)
+            close_tgt = price_index.get(tgt_date)
+            if close_pred is None or close_tgt is None:
+                continue
+
+            actual_return = float(np.log(close_tgt / close_pred))
+            actual_direction = "UP" if actual_return > 0 else "DOWN"
+            is_correct = 1 if direction == actual_direction else 0
+
+            conn.execute(
+                "UPDATE predictions "
+                "SET actual_return=?, actual_direction=?, is_correct=? "
+                "WHERE rowid=?",
+                (actual_return, actual_direction, is_correct, rowid),
+            )
+
+
 def build_decoder_data(last_date: pd.Timestamp, features_df: pd.DataFrame) -> pd.DataFrame:
     """未来5営業日分の decoder_data (time_varying_known) を生成する。
 
@@ -72,8 +131,17 @@ def build_decoder_data(last_date: pd.Timestamp, features_df: pd.DataFrame) -> pd
 
 def predict_daily() -> None:
     """日次予測を実行する。"""
+    # DB マイグレーション (actual 系カラム追加)
+    if PREDICTIONS_DB.exists():
+        migrate_db(PREDICTIONS_DB)
+
     print("=== 最新データ取得 ===")
     raw = fetch_all_data(use_cache=False)
+
+    # 過去予測に実績を書き戻す
+    if PREDICTIONS_DB.exists() and "usdjpy_close" in raw.columns:
+        backfill_actuals(PREDICTIONS_DB, raw["usdjpy_close"])
+
     features = build_features(raw)
     prepped = prepare_data(features)
 
