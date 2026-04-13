@@ -37,7 +37,6 @@ from data.dataset import (
 )
 from scripts.evaluate import find_best_checkpoints, ensemble_predict
 from model.confidence import ConfidenceEstimator
-from model.adaptive_threshold import AdaptiveThreshold
 
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
@@ -56,7 +55,6 @@ def migrate_db(db_path) -> None:
             ("confidence_score", "REAL"),
             ("confidence_level", "TEXT"),
             ("should_trade", "INTEGER"),
-            ("adaptive_threshold", "REAL"),
         ]:
             if col not in existing:
                 conn.execute(
@@ -211,24 +209,6 @@ def predict_daily() -> None:
     else:
         confidence_params = None
 
-    # 適応閾値パラメータロード
-    adaptive_path = ARTIFACT_DIR / "adaptive_threshold_params.json"
-    if adaptive_path.exists():
-        with open(adaptive_path) as f:
-            adaptive_params = json.load(f)
-    else:
-        adaptive_params = None
-
-    # 現在の ATR を取得
-    current_atr = float(features["atr"].iloc[-1])
-    train_atr_median = adaptive_params["train_atr_median"] if adaptive_params else current_atr
-
-    # AdaptiveThreshold インスタンス
-    at = AdaptiveThreshold(
-        base_thresholds=thresholds,
-        abstain_margin=adaptive_params["abstain_margin"] if adaptive_params else 0.0,
-    )
-
     # 結果を整形
     future_dates = pd.bdate_range(
         start=last_date + pd.offsets.BDay(1),
@@ -237,13 +217,12 @@ def predict_daily() -> None:
 
     results = []
     for h in range(PREDICTION_LENGTH):
-        base_threshold = thresholds.get(f"horizon_{h+1}", 0.0)
+        threshold = thresholds.get(f"horizon_{h+1}", 0.0)
         median_val = float(preds["median"][0, h])
         dir_signal = float(preds["direction_signal"][0, h])
 
-        # 適応閾値による方向判定
-        direction = at.classify(dir_signal, h + 1, current_atr, train_atr_median)
-        adapt_thresh = at.get_threshold(h + 1, current_atr, train_atr_median)
+        # 固定閾値による方向判定
+        direction = "UP" if dir_signal > threshold else "DOWN"
 
         # 信頼度スコア
         if confidence_params is not None:
@@ -257,7 +236,7 @@ def predict_daily() -> None:
             )
             per_model = preds["per_model_signals"][:, 0, h].tolist()
             conf_score = ce.score(
-                per_model, base_threshold,
+                per_model, threshold,
                 float(preds["q90"][0, h]),
                 float(preds["q10"][0, h]),
                 dir_signal,
@@ -267,7 +246,7 @@ def predict_daily() -> None:
             conf_score = 0.0
             conf_level = "MEDIUM"
 
-        should_trade = direction != "ABSTAIN" and conf_level != "LOW"
+        should_trade = conf_level != "LOW"
 
         results.append({
             "prediction_date": str(date.today()),
@@ -277,12 +256,11 @@ def predict_daily() -> None:
             "direction_signal": dir_signal,
             "q10": float(preds["q10"][0, h]),
             "q90": float(preds["q90"][0, h]),
-            "threshold": base_threshold,
+            "threshold": threshold,
             "direction": direction,
             "confidence_score": round(conf_score, 4),
             "confidence_level": conf_level,
             "should_trade": int(should_trade),
-            "adaptive_threshold": round(adapt_thresh, 6),
         })
 
     results_df = pd.DataFrame(results)

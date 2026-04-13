@@ -154,13 +154,12 @@ def panel_prediction_chart(preds: pd.DataFrame) -> None:
 
 
 def panel_direction_signals(preds: pd.DataFrame) -> None:
-    """方向シグナル: ホライゾン別 UP/DOWN/ABSTAIN を信頼度付きで表示。"""
+    """方向シグナル: ホライゾン別 UP/DOWN を信頼度付きで表示。"""
     st.subheader("方向シグナル")
     st.caption(
         "各ホライゾン (1〜5 営業日先) の方向予測。"
-        "全分位点の加重平均 (direction signal) が適応閾値を上回れば UP、下回れば DOWN、"
-        "閾値近傍なら ABSTAIN と判定する。信頼度 (HIGH/MEDIUM/LOW) はアンサンブル一致度・"
-        "予測不確実性・シグナル強度の合成スコア。"
+        "全分位点の加重平均 (direction signal) が閾値を上回れば UP、下回れば DOWN と判定する。"
+        "信頼度 (HIGH/MEDIUM/LOW) はアンサンブル一致度・予測不確実性・シグナル強度の合成スコア。"
     )
     if preds.empty:
         st.info("データがありません。")

@@ -38,7 +38,6 @@ from data.fetch import fetch_all_data
 from data.features import build_features
 from data.dataset import prepare_data, split_data, create_datasets
 from model.confidence import ConfidenceEstimator
-from model.adaptive_threshold import AdaptiveThreshold
 
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
@@ -152,22 +151,6 @@ def find_optimal_threshold(
 
     return float(thresholds_grid[np.argmax(scores)])
 
-
-def extract_sample_atrs(
-    df: pd.DataFrame, n_samples: int,
-) -> np.ndarray:
-    """データセットの各サンプルに対応する ATR 値を抽出する。
-
-    各サンプル i のエンコーダ最終位置は df.iloc[i + ENCODER_LENGTH - 1]。
-    """
-    atrs = []
-    for i in range(n_samples):
-        idx = i + ENCODER_LENGTH - 1
-        if idx < len(df):
-            atrs.append(df.iloc[idx]["atr"])
-        else:
-            atrs.append(df["atr"].iloc[-1])
-    return np.array(atrs)
 
 
 def optimize_confidence_params(
@@ -285,80 +268,6 @@ def optimize_confidence_params(
     }
 
 
-def optimize_adaptive_params(
-    preds: dict,
-    actuals: np.ndarray,
-    thresholds: dict[str, float],
-    sample_atrs: np.ndarray,
-    train_atr_median: float,
-) -> dict:
-    """tune セットで abstain_margin を最適化する。
-
-    Args:
-        preds: ensemble_predict の出力
-        actuals: (n_samples, horizon) の実績値
-        thresholds: ホライゾン別の基本閾値
-        sample_atrs: 各サンプルの ATR 値
-        train_atr_median: 学習データの ATR 中央値
-
-    Returns:
-        最適化されたパラメータ dict
-    """
-    n_samples = preds["direction_signal"].shape[0]
-    best_score = -np.inf
-    best_margin = 0.0
-
-    for margin_int in range(21):  # 0.00 ~ 0.20
-        margin = margin_int * 0.01
-        at = AdaptiveThreshold(
-            base_thresholds=thresholds,
-            abstain_margin=margin,
-        )
-
-        total_correct = 0
-        total_judged = 0
-        total_pred_up = 0
-        total_actual_up = 0
-
-        for h in range(PREDICTION_LENGTH):
-            actuals_h = actuals[:n_samples, h]
-
-            for i in range(n_samples):
-                direction = at.classify(
-                    float(preds["direction_signal"][i, h]),
-                    h + 1,
-                    float(sample_atrs[i]),
-                    train_atr_median,
-                )
-                if direction == "ABSTAIN":
-                    continue
-
-                actual_up = actuals_h[i] > 0
-                pred_up = direction == "UP"
-                total_correct += int(pred_up == actual_up)
-                total_judged += 1
-                total_pred_up += int(pred_up)
-                total_actual_up += int(actual_up)
-
-        if total_judged == 0:
-            continue
-
-        accuracy = total_correct / total_judged
-        pred_up_ratio = total_pred_up / total_judged
-        actual_up_ratio = total_actual_up / total_judged
-        ratio_gap = abs(pred_up_ratio - actual_up_ratio)
-        score = accuracy - 1.0 * ratio_gap
-
-        if score > best_score:
-            best_score = score
-            best_margin = margin
-
-    return {
-        "abstain_margin": best_margin,
-        "train_atr_median": train_atr_median,
-        "best_score": float(best_score),
-    }
-
 
 def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     """テストデータでモデルを評価する。"""
@@ -413,21 +322,6 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     with open(conf_path, "w") as f:
         json.dump(confidence_params, f, indent=2)
 
-    # --- 適応閾値パラメータ最適化 ---
-    print("=== 適応閾値パラメータ最適化 ===")
-    train_atr_median = float(train_df["atr"].median())
-    tune_atrs = extract_sample_atrs(tune_df, n_tune_samples)
-
-    adaptive_params = optimize_adaptive_params(
-        tune_preds, tune_actuals_np, thresholds, tune_atrs, train_atr_median,
-    )
-    print(f"  Best abstain_margin: {adaptive_params['abstain_margin']}")
-    print(f"  Best score: {adaptive_params['best_score']:.3f}")
-
-    adaptive_path = ARTIFACT_DIR / "adaptive_threshold_params.json"
-    with open(adaptive_path, "w") as f:
-        json.dump(adaptive_params, f, indent=2)
-
     # --- テストセットで評価 ---
     print("=== テストセット評価 ===")
     test_dataset = training.from_dataset(training, test_df, stop_randomization=True)
@@ -443,12 +337,6 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     ])
 
     n_test_samples = test_preds["direction_signal"].shape[0]
-    test_atrs = extract_sample_atrs(test_df, n_test_samples)
-
-    at = AdaptiveThreshold(
-        base_thresholds=thresholds,
-        abstain_margin=adaptive_params["abstain_margin"],
-    )
 
     for h in range(PREDICTION_LENGTH):
         median_h = test_preds["median"][:, h].numpy()
@@ -463,7 +351,7 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
         preds_thresholded = (dir_signal_h > threshold).astype(float)
         baseline_metrics = compute_direction_metrics(actuals_h, preds_thresholded)
 
-        # 適応閾値 + 信頼度による評価
+        # 信頼度による評価
         spread_pcts = np.array(confidence_params["spread_percentiles"][f"horizon_{h+1}"])
         ce = ConfidenceEstimator(
             weights=tuple(confidence_params["weights"]),
@@ -472,18 +360,12 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
             confidence_boundaries=tuple(confidence_params["confidence_boundaries"]),
         )
 
-        n_judged = 0
-        n_correct = 0
         n_high_conf = 0
         n_high_conf_correct = 0
-        n_tradeable = 0
-        n_tradeable_correct = 0
+        n_not_low = 0
+        n_not_low_correct = 0
 
         for i in range(n_test_samples):
-            direction = at.classify(
-                float(dir_signal_h[i]), h + 1,
-                float(test_atrs[i]), train_atr_median,
-            )
             per_model = test_preds["per_model_signals"][:, i, h].tolist()
             conf_score = ce.score(
                 per_model, threshold,
@@ -493,42 +375,31 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
             )
             conf_level = ce.classify_level(conf_score)
             actual_up = actuals_h[i] > 0
-
-            if direction != "ABSTAIN":
-                pred_up = direction == "UP"
-                n_judged += 1
-                n_correct += int(pred_up == actual_up)
+            pred_up = dir_signal_h[i] > threshold
 
             if conf_level == "HIGH":
                 n_high_conf += 1
-                pred_up_base = dir_signal_h[i] > threshold
-                n_high_conf_correct += int(pred_up_base == actual_up)
+                n_high_conf_correct += int(pred_up == actual_up)
 
-            should_trade = direction != "ABSTAIN" and conf_level != "LOW"
-            if should_trade:
-                pred_up = direction == "UP"
-                n_tradeable += 1
-                n_tradeable_correct += int(pred_up == actual_up)
+            if conf_level != "LOW":
+                n_not_low += 1
+                n_not_low_correct += int(pred_up == actual_up)
 
         report["horizons"][f"horizon_{h+1}"] = {
             "mae": mae,
             "rmse": rmse,
             **baseline_metrics,
-            "adaptive_accuracy": float(n_correct / n_judged) if n_judged > 0 else 0.0,
-            "adaptive_coverage": float(n_judged / n_test_samples),
             "high_conf_accuracy": float(n_high_conf_correct / n_high_conf) if n_high_conf > 0 else 0.0,
             "high_conf_count": n_high_conf,
-            "tradeable_accuracy": float(n_tradeable_correct / n_tradeable) if n_tradeable > 0 else 0.0,
-            "tradeable_coverage": float(n_tradeable / n_test_samples),
+            "not_low_accuracy": float(n_not_low_correct / n_not_low) if n_not_low > 0 else 0.0,
+            "not_low_coverage": float(n_not_low / n_test_samples),
         }
         print(f"  Horizon {h+1}: MAE={mae:.6f}, RMSE={rmse:.6f}, "
               f"BaselineAcc={baseline_metrics['direction_accuracy']:.3f}, "
-              f"AdaptiveAcc={report['horizons'][f'horizon_{h+1}']['adaptive_accuracy']:.3f} "
-              f"(coverage={report['horizons'][f'horizon_{h+1}']['adaptive_coverage']:.1%}), "
               f"HighConfAcc={report['horizons'][f'horizon_{h+1}']['high_conf_accuracy']:.3f} "
               f"(n={n_high_conf}), "
-              f"TradeableAcc={report['horizons'][f'horizon_{h+1}']['tradeable_accuracy']:.3f} "
-              f"(coverage={report['horizons'][f'horizon_{h+1}']['tradeable_coverage']:.1%})")
+              f"NotLowAcc={report['horizons'][f'horizon_{h+1}']['not_low_accuracy']:.3f} "
+              f"(coverage={report['horizons'][f'horizon_{h+1}']['not_low_coverage']:.1%})")
 
     # --- レポート保存 ---
     report_path = EVAL_DIR / "eval_report.json"
