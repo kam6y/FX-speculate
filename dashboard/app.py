@@ -351,6 +351,103 @@ def panel_attention_heatmap() -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
+def panel_prediction_tracking(preds: pd.DataFrame) -> None:
+    """予測 vs 実績: 過去の予測の的中/外れを追跡。"""
+    st.subheader("予測 vs 実績トラッキング")
+    st.caption(
+        "過去の予測に対して実際の値動きがどうだったかを追跡。"
+        "的中率が 50% (ランダム基準) を安定的に上回っているかが重要。"
+    )
+
+    if preds.empty or "is_correct" not in preds.columns:
+        st.info("データがありません。scripts/predict.py を実行してください。")
+        return
+
+    filled = preds[preds["is_correct"].notna()].copy()
+    pending = preds[preds["is_correct"].isna()]
+
+    if filled.empty:
+        st.info(
+            f"実績データがまだありません（{len(pending)} 件が待機中）。"
+            "対象日を過ぎた後に predict.py を再実行すると実績が反映されます。"
+        )
+        return
+
+    # --- 的中率サマリー ---
+    overall_acc = filled["is_correct"].mean()
+    st.metric("全体的中率", f"{overall_acc:.1%}", delta=f"{overall_acc - 0.5:+.1%} vs ランダム")
+
+    cols = st.columns(PREDICTION_LENGTH)
+    for h in range(1, PREDICTION_LENGTH + 1):
+        h_data = filled[filled["horizon"] == h]
+        if h_data.empty:
+            cols[h - 1].metric(f"{h}日後", "N/A")
+        else:
+            acc = h_data["is_correct"].mean()
+            n = len(h_data)
+            cols[h - 1].metric(f"{h}日後", f"{acc:.1%}", delta=f"n={n}")
+
+    # --- 予測履歴テーブル ---
+    st.markdown("#### 予測履歴")
+
+    display = preds.sort_values(
+        ["prediction_date", "horizon"], ascending=[False, True]
+    ).copy()
+    display["結果"] = display["is_correct"].map({1.0: "○", 0.0: "×"}).fillna("待機中")
+    display["実績方向"] = display["actual_direction"].fillna("-")
+
+    table_df = display.rename(columns={
+        "prediction_date": "予測日",
+        "target_date": "対象日",
+        "horizon": "H",
+        "direction": "予測方向",
+    })[["予測日", "対象日", "H", "予測方向", "実績方向", "結果"]]
+
+    def highlight_result(row):
+        if row["結果"] == "○":
+            return ["background-color: rgba(0, 204, 150, 0.2)"] * len(row)
+        elif row["結果"] == "×":
+            return ["background-color: rgba(239, 85, 59, 0.2)"] * len(row)
+        return [""] * len(row)
+
+    styled = table_df.style.apply(highlight_result, axis=1)
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        height=min(35 * (len(table_df) + 1) + 10, 500),
+    )
+
+    # --- 的中率推移グラフ ---
+    if len(filled["prediction_date"].unique()) >= 2:
+        st.markdown("#### 的中率推移")
+        by_date = (
+            filled.groupby("prediction_date")["is_correct"]
+            .mean()
+            .reset_index()
+            .sort_values("prediction_date")
+        )
+
+        fig = go.Figure(go.Scatter(
+            x=by_date["prediction_date"],
+            y=by_date["is_correct"],
+            mode="lines+markers",
+            line=dict(color="#636EFA", width=2),
+            marker=dict(size=8),
+            name="的中率",
+        ))
+        fig.add_hline(
+            y=0.5, line_dash="dash", line_color="gray",
+            annotation_text="ランダム基準 (50%)",
+        )
+        fig.update_layout(
+            yaxis=dict(title="的中率", range=[0, 1], tickformat=".0%"),
+            xaxis_title="予測日",
+            height=300,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
 def panel_accuracy_history(report: dict) -> None:
     """過去予測の精度: eval レポートからメトリクスを表示。"""
     st.subheader("過去予測の精度 (テストセット)")
@@ -422,6 +519,10 @@ def main() -> None:
     panel_prediction_chart(preds_df)
     st.divider()
     panel_direction_signals(preds_df)
+    st.divider()
+
+    # --- 予測 vs 実績 ---
+    panel_prediction_tracking(preds_df)
     st.divider()
 
     # --- 中段: 方向比率 + イベントカレンダー ---
