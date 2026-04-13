@@ -87,3 +87,15 @@ DATA_SPLIT_RATIOS = {
     "threshold_tune": 0.05,
     "test": 0.15,
 }
+
+# --- Confidence Estimation ---
+CONFIDENCE_WEIGHTS = (0.4, 0.3, 0.3)  # (agreement, spread, strength) tune で上書き
+SIGNAL_CLIP_MAX = 2.0
+CONFIDENCE_COVERAGE_TARGET = 0.70
+
+# --- Adaptive Threshold ---
+VOL_CLAMP_MIN = 0.7
+VOL_CLAMP_MAX = 1.5
+DAMPING_HORIZONS = [1, 2, 3]
+DAMPING_FACTOR = 0.5
+ABSTAIN_MARGIN = 0.05
