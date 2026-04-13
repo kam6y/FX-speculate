@@ -76,6 +76,7 @@ def ensemble_predict(
     - q10: 各モデルの min
     - q90: 各モデルの max
     - direction_signal: 全分位点の加重平均（分布の歪み情報を活用）
+    - per_model_signals: モデル別の direction_signal
     """
     all_preds = []
     for model in models:
@@ -89,6 +90,8 @@ def ensemble_predict(
     model_mean = stacked.mean(dim=0)  # (batch, horizon, quantiles)
     direction_signal = (model_mean * quantile_weights).sum(dim=-1)
 
+    per_model_signals = (stacked * quantile_weights).sum(dim=-1)  # (n_models, batch, horizon)
+
     q10_idx = QUANTILES.index(0.1)
     q90_idx = QUANTILES.index(0.9)
 
@@ -97,6 +100,7 @@ def ensemble_predict(
         "q10": stacked[:, :, :, q10_idx].min(dim=0).values,
         "q90": stacked[:, :, :, q90_idx].max(dim=0).values,
         "direction_signal": direction_signal,
+        "per_model_signals": per_model_signals,
     }
     return result
 
