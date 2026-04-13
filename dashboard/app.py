@@ -196,7 +196,7 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
         )
         if conf_level:
             conf_color = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}.get(conf_level, "")
-            trade_label = "Trade" if should_trade else "Skip"
+            trade_label = "Trade" if should_trade == 1 else "Skip"
             cols[i].caption(f"{conf_color} 信頼度: {conf_level} ({trade_label})")
 
 
