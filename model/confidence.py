@@ -23,7 +23,7 @@ class ConfidenceEstimator:
     def ensemble_agreement(
         self, per_model_signals: list[float], threshold: float,
     ) -> float:
-        """5モデルの方向一致度を返す (0.6〜1.0)。"""
+        """モデル間の方向一致度 (多数派比率, 0.5〜1.0)。閾値ぴったりは DOWN に計上。"""
         n_up = sum(1 for s in per_model_signals if s > threshold)
         n_down = len(per_model_signals) - n_up
         return max(n_up, n_down) / len(per_model_signals)

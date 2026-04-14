@@ -1,5 +1,7 @@
 # 信頼度推定 + 適応的閾値 実装プラン
 
+> **Status (2026-04-14):** 本プランのうち **AdaptiveThreshold（ボラティリティスケーリング + ABSTAIN）は撤去** された。tune セット (124サンプル) では有意な改善が得られず、コミット `b481f13 refactor: remove adaptive threshold, keep confidence estimation only` で ConfidenceEstimator のみを残す構成にリファクタ済み。以降のタスクのうち `model/adaptive_threshold.py` および関連する `evaluate.py` / `predict.py` の AdaptiveThreshold 呼び出しは **実装されていない**。歴史的経緯として保管しているが、新規参照時は実装コード側（`model/confidence.py`, `scripts/evaluate.py`, `scripts/predict.py`）を優先すること。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** TFTの予測出力に信頼度推定と適応的閾値を後段として追加し、方向精度と予測の実用性を向上させる。

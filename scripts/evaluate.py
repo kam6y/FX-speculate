@@ -189,6 +189,8 @@ def optimize_confidence_params(
 
             total_correct = 0
             total_selected = 0
+            total_pred_up = 0
+            total_actual_up = 0
 
             for h in range(PREDICTION_LENGTH):
                 threshold = thresholds[f"horizon_{h+1}"]
@@ -223,11 +225,17 @@ def optimize_confidence_params(
 
                 total_correct += correct.sum()
                 total_selected += selected.sum()
+                total_pred_up += pred_up[selected].sum()
+                total_actual_up += actual_up[selected].sum()
 
             if total_selected > 0:
                 acc = total_correct / total_selected
-                if acc > best_score:
-                    best_score = acc
+                ratio_gap = abs(
+                    total_pred_up / total_selected - total_actual_up / total_selected
+                )
+                score = acc - 1.0 * ratio_gap
+                if score > best_score:
+                    best_score = score
                     best_weights = (w1, w2, w3)
 
     # 信頼度スコアの境界値を算出 (tune セットの 33/66 パーセンタイル)
@@ -264,7 +272,7 @@ def optimize_confidence_params(
         "weights": list(best_weights),
         "spread_percentiles": spread_pcts,
         "confidence_boundaries": [low_boundary, high_boundary],
-        "best_coverage_accuracy": float(best_score),
+        "best_coverage_score": float(best_score),
     }
 
 
@@ -316,7 +324,7 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
         tune_preds, tune_actuals_np, thresholds,
     )
     print(f"  Best weights: {confidence_params['weights']}")
-    print(f"  Coverage accuracy: {confidence_params['best_coverage_accuracy']:.3f}")
+    print(f"  Coverage score (acc - ratio_gap): {confidence_params['best_coverage_score']:.3f}")
 
     conf_path = ARTIFACT_DIR / "confidence_params.json"
     with open(conf_path, "w") as f:
