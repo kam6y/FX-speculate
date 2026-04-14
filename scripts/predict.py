@@ -36,12 +36,13 @@ from data.dataset import (
     TIME_VARYING_KNOWN_CATEGORICALS,
 )
 from scripts.evaluate import find_best_checkpoints, ensemble_predict
+from model.confidence import ConfidenceEstimator
 
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
 
 def migrate_db(db_path) -> None:
-    """predictions テーブルに actual 系カラムを idempotent に追加する。"""
+    """predictions テーブルに新カラムを idempotent に追加する。"""
     with sqlite3.connect(str(db_path)) as conn:
         existing = {
             row[1]
@@ -51,6 +52,9 @@ def migrate_db(db_path) -> None:
             ("actual_return", "REAL"),
             ("actual_direction", "TEXT"),
             ("is_correct", "INTEGER"),
+            ("confidence_score", "REAL"),
+            ("confidence_level", "TEXT"),
+            ("should_trade", "INTEGER"),
         ]:
             if col not in existing:
                 conn.execute(
@@ -197,6 +201,14 @@ def predict_daily() -> None:
     else:
         thresholds = {f"horizon_{h+1}": 0.0 for h in range(PREDICTION_LENGTH)}
 
+    # 信頼度パラメータロード
+    conf_path = ARTIFACT_DIR / "confidence_params.json"
+    if conf_path.exists():
+        with open(conf_path) as f:
+            confidence_params = json.load(f)
+    else:
+        confidence_params = None
+
     # 結果を整形
     future_dates = pd.bdate_range(
         start=last_date + pd.offsets.BDay(1),
@@ -207,9 +219,34 @@ def predict_daily() -> None:
     for h in range(PREDICTION_LENGTH):
         threshold = thresholds.get(f"horizon_{h+1}", 0.0)
         median_val = float(preds["median"][0, h])
-        # direction_signal (全分位点の加重平均) で方向判定
         dir_signal = float(preds["direction_signal"][0, h])
+
+        # 固定閾値による方向判定
         direction = "UP" if dir_signal > threshold else "DOWN"
+
+        # 信頼度スコア
+        if confidence_params is not None:
+            spread_pcts = np.array(
+                confidence_params["spread_percentiles"][f"horizon_{h+1}"]
+            )
+            ce = ConfidenceEstimator(
+                weights=tuple(confidence_params["weights"]),
+                spread_percentiles=spread_pcts,
+                confidence_boundaries=tuple(confidence_params["confidence_boundaries"]),
+            )
+            per_model = preds["per_model_signals"][:, 0, h].tolist()
+            conf_score = ce.score(
+                per_model, threshold,
+                float(preds["q90"][0, h]),
+                float(preds["q10"][0, h]),
+                dir_signal,
+            )
+            conf_level = ce.classify_level(conf_score)
+        else:
+            conf_score = 0.0
+            conf_level = "MEDIUM"
+
+        should_trade = conf_level != "LOW"
 
         results.append({
             "prediction_date": str(date.today()),
@@ -221,6 +258,9 @@ def predict_daily() -> None:
             "q90": float(preds["q90"][0, h]),
             "threshold": threshold,
             "direction": direction,
+            "confidence_score": float(conf_score),
+            "confidence_level": conf_level,
+            "should_trade": int(should_trade),
         })
 
     results_df = pd.DataFrame(results)

@@ -154,12 +154,12 @@ def panel_prediction_chart(preds: pd.DataFrame) -> None:
 
 
 def panel_direction_signals(preds: pd.DataFrame) -> None:
-    """方向シグナル: ホライゾン別 UP/DOWN を st.metric で表示。"""
+    """方向シグナル: ホライゾン別 UP/DOWN を信頼度付きで表示。"""
     st.subheader("方向シグナル")
     st.caption(
         "各ホライゾン (1〜5 営業日先) の方向予測。"
         "全分位点の加重平均 (direction signal) が閾値を上回れば UP、下回れば DOWN と判定する。"
-        "閾値はチューニング用データで最適化されたもの。"
+        "信頼度 (HIGH/MEDIUM/LOW) はアンサンブル一致度・予測不確実性・シグナル強度の合成スコア。"
     )
     if preds.empty:
         st.info("データがありません。")
@@ -175,7 +175,9 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
         direction = row.get("direction", "N/A")
         median_val = row.get("median", 0.0)
         dir_signal = row.get("direction_signal", median_val)
-        threshold = row.get("threshold", 0.0)
+        conf_level = row.get("confidence_level", "")
+        conf_score = row.get("confidence_score", None)
+        should_trade = row.get("should_trade", None)
 
         if direction == "UP":
             arrow, delta_color = "↑", "normal"
@@ -183,6 +185,7 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
             arrow, delta_color = "↓", "inverse"
         else:
             arrow, delta_color = "－", "off"
+
         label = f"{int(row['horizon'])}日後 ({row['target_date'].strftime('%m/%d')})"
         cols[i].metric(
             label=label,
@@ -190,6 +193,9 @@ def panel_direction_signals(preds: pd.DataFrame) -> None:
             delta=f"signal={dir_signal:.5f}",
             delta_color=delta_color,
         )
+        if conf_level:
+            trade_label = "Trade" if should_trade == 1 else "Skip"
+            cols[i].caption(f"信頼度: {conf_level} ({trade_label})")
 
 
 def panel_direction_ratio(report: dict) -> None:
@@ -352,11 +358,11 @@ def panel_attention_heatmap() -> None:
 
 
 def panel_prediction_tracking(preds: pd.DataFrame) -> None:
-    """予測 vs 実績: 過去の予測の的中/外れを追跡。"""
+    """予測 vs 実績: 過去の予測の的中/外れを信頼度別に追跡。"""
     st.subheader("予測 vs 実績トラッキング")
     st.caption(
         "過去の予測に対して実際の値動きがどうだったかを追跡。"
-        "的中率が 50% (ランダム基準) を安定的に上回っているかが重要。"
+        "信頼度が高い予測ほど的中率が高ければ、信頼度推定が有効に機能している。"
     )
 
     if preds.empty or "is_correct" not in preds.columns:
@@ -373,10 +379,29 @@ def panel_prediction_tracking(preds: pd.DataFrame) -> None:
         )
         return
 
-    # --- 的中率サマリー ---
-    overall_acc = filled["is_correct"].mean()
-    st.metric("全体的中率", f"{overall_acc:.1%}", delta=f"{overall_acc - 0.5:+.1%} vs ランダム")
+    # --- 全体 vs 信頼度別の的中率サマリー ---
+    has_confidence = "confidence_level" in filled.columns and filled["confidence_level"].notna().any()
 
+    overall_acc = filled["is_correct"].mean()
+
+    if has_confidence:
+        high_data = filled[filled["confidence_level"] == "HIGH"]
+        high_acc = high_data["is_correct"].mean() if not high_data.empty else None
+
+        col_all, col_high = st.columns(2)
+        col_all.metric("全体的中率", f"{overall_acc:.1%}", delta=f"{overall_acc - 0.5:+.1%} vs ランダム")
+        if high_acc is not None:
+            col_high.metric(
+                "HIGH信頼の的中率",
+                f"{high_acc:.1%}",
+                delta=f"{high_acc - overall_acc:+.1%} vs 全体 (n={len(high_data)})",
+            )
+        else:
+            col_high.metric("HIGH信頼の的中率", "N/A")
+    else:
+        st.metric("全体的中率", f"{overall_acc:.1%}", delta=f"{overall_acc - 0.5:+.1%} vs ランダム")
+
+    # --- ホライゾン別 ---
     cols = st.columns(PREDICTION_LENGTH)
     for h in range(1, PREDICTION_LENGTH + 1):
         h_data = filled[filled["horizon"] == h]
@@ -396,12 +421,18 @@ def panel_prediction_tracking(preds: pd.DataFrame) -> None:
     display["結果"] = display["is_correct"].map({1.0: "○", 0.0: "×"}).fillna("待機中")
     display["実績方向"] = display["actual_direction"].fillna("-")
 
+    if has_confidence:
+        display["信頼度"] = display["confidence_level"].fillna("-")
+        table_cols = ["予測日", "対象日", "H", "予測方向", "実績方向", "信頼度", "結果"]
+    else:
+        table_cols = ["予測日", "対象日", "H", "予測方向", "実績方向", "結果"]
+
     table_df = display.rename(columns={
         "prediction_date": "予測日",
         "target_date": "対象日",
         "horizon": "H",
         "direction": "予測方向",
-    })[["予測日", "対象日", "H", "予測方向", "実績方向", "結果"]]
+    })[table_cols]
 
     def highlight_result(row):
         if row["結果"] == "○":
@@ -418,7 +449,7 @@ def panel_prediction_tracking(preds: pd.DataFrame) -> None:
         height=min(35 * (len(table_df) + 1) + 10, 500),
     )
 
-    # --- 的中率推移グラフ ---
+    # --- 的中率推移グラフ (全体 vs HIGH信頼) ---
     if len(filled["prediction_date"].unique()) >= 2:
         st.markdown("#### 的中率推移")
         by_date = (
@@ -428,14 +459,33 @@ def panel_prediction_tracking(preds: pd.DataFrame) -> None:
             .sort_values("prediction_date")
         )
 
-        fig = go.Figure(go.Scatter(
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
             x=by_date["prediction_date"],
             y=by_date["is_correct"],
             mode="lines+markers",
             line=dict(color="#636EFA", width=2),
             marker=dict(size=8),
-            name="的中率",
+            name="全体",
         ))
+
+        if has_confidence and not high_data.empty:
+            high_by_date = (
+                high_data.groupby("prediction_date")["is_correct"]
+                .mean()
+                .reset_index()
+                .sort_values("prediction_date")
+            )
+            if len(high_by_date) >= 2:
+                fig.add_trace(go.Scatter(
+                    x=high_by_date["prediction_date"],
+                    y=high_by_date["is_correct"],
+                    mode="lines+markers",
+                    line=dict(color="#00CC96", width=2),
+                    marker=dict(size=8),
+                    name="HIGH信頼のみ",
+                ))
+
         fig.add_hline(
             y=0.5, line_dash="dash", line_color="gray",
             annotation_text="ランダム基準 (50%)",
@@ -444,8 +494,51 @@ def panel_prediction_tracking(preds: pd.DataFrame) -> None:
             yaxis=dict(title="的中率", range=[0, 1], tickformat=".0%"),
             xaxis_title="予測日",
             height=300,
+            legend=dict(orientation="h", y=-0.2),
         )
         st.plotly_chart(fig, use_container_width=True)
+
+
+def panel_confidence_detail(preds: pd.DataFrame) -> None:
+    """信頼度詳細: 過去予測の信頼度別的中率。"""
+    st.subheader("信頼度別パフォーマンス")
+    st.caption(
+        "過去の予測を信頼度レベル (HIGH/MEDIUM/LOW) 別に集計した的中率。"
+        "HIGH の的中率が全体平均を上回っていれば、信頼度推定が有効に機能している。"
+    )
+
+    if preds.empty or "confidence_level" not in preds.columns:
+        st.info("信頼度データがありません。最新の evaluate.py → predict.py を実行してください。")
+        return
+
+    filled = preds[preds["is_correct"].notna() & preds["confidence_level"].notna()].copy()
+    if filled.empty:
+        st.info("実績データがまだありません。")
+        return
+
+    rows = []
+    for level in ["HIGH", "MEDIUM", "LOW"]:
+        subset = filled[filled["confidence_level"] == level]
+        if subset.empty:
+            rows.append({"信頼度": level, "件数": 0, "的中率": "N/A"})
+        else:
+            acc = subset["is_correct"].mean()
+            rows.append({
+                "信頼度": level,
+                "件数": len(subset),
+                "的中率": f"{acc:.1%}",
+            })
+
+    tradeable = filled[filled["should_trade"] == 1]
+    if not tradeable.empty:
+        trade_acc = tradeable["is_correct"].mean()
+        rows.append({
+            "信頼度": "Trade対象のみ",
+            "件数": len(tradeable),
+            "的中率": f"{trade_acc:.1%}",
+        })
+
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def panel_accuracy_history(report: dict) -> None:
@@ -523,6 +616,10 @@ def main() -> None:
 
     # --- 予測 vs 実績 ---
     panel_prediction_tracking(preds_df)
+    st.divider()
+
+    # --- 信頼度別パフォーマンス ---
+    panel_confidence_detail(preds_df)
     st.divider()
 
     # --- 中段: 方向比率 + イベントカレンダー ---

@@ -87,3 +87,8 @@ DATA_SPLIT_RATIOS = {
     "threshold_tune": 0.05,
     "test": 0.15,
 }
+
+# --- Confidence Estimation ---
+CONFIDENCE_WEIGHTS = (0.4, 0.3, 0.3)  # (agreement, spread, strength) tune で上書き
+SIGNAL_CLIP_MAX = 2.0
+CONFIDENCE_COVERAGE_TARGET = 0.70

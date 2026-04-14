@@ -31,10 +31,13 @@ from config import (
     TOP_K_CHECKPOINTS,
     QUANTILES,
     QUANTILE_SIGNAL_WEIGHTS,
+    CONFIDENCE_COVERAGE_TARGET,
+    SIGNAL_CLIP_MAX,
 )
 from data.fetch import fetch_all_data
 from data.features import build_features
 from data.dataset import prepare_data, split_data, create_datasets
+from model.confidence import ConfidenceEstimator
 
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
@@ -76,6 +79,7 @@ def ensemble_predict(
     - q10: 各モデルの min
     - q90: 各モデルの max
     - direction_signal: 全分位点の加重平均（分布の歪み情報を活用）
+    - per_model_signals: モデル別の direction_signal
     """
     all_preds = []
     for model in models:
@@ -89,6 +93,8 @@ def ensemble_predict(
     model_mean = stacked.mean(dim=0)  # (batch, horizon, quantiles)
     direction_signal = (model_mean * quantile_weights).sum(dim=-1)
 
+    per_model_signals = (stacked * quantile_weights).sum(dim=-1)  # (n_models, batch, horizon)
+
     q10_idx = QUANTILES.index(0.1)
     q90_idx = QUANTILES.index(0.9)
 
@@ -97,6 +103,7 @@ def ensemble_predict(
         "q10": stacked[:, :, :, q10_idx].min(dim=0).values,
         "q90": stacked[:, :, :, q90_idx].max(dim=0).values,
         "direction_signal": direction_signal,
+        "per_model_signals": per_model_signals,
     }
     return result
 
@@ -145,6 +152,120 @@ def find_optimal_threshold(
     return float(thresholds_grid[np.argmax(scores)])
 
 
+
+def optimize_confidence_params(
+    preds: dict,
+    actuals: np.ndarray,
+    thresholds: dict[str, float],
+) -> dict:
+    """tune セットで信頼度の重みを最適化する。
+
+    Args:
+        preds: ensemble_predict の出力 (per_model_signals, q10, q90, direction_signal)
+        actuals: (n_samples, horizon) の実績値
+        thresholds: ホライゾン別の基本閾値
+
+    Returns:
+        最適化されたパラメータ dict
+    """
+    n_samples = preds["direction_signal"].shape[0]
+    H = PREDICTION_LENGTH
+    per_model_np = preds["per_model_signals"].numpy()
+    n_models = per_model_np.shape[0]
+    dir_signals_np = preds["direction_signal"].numpy()
+    q90_np = preds["q90"].numpy()
+    q10_np = preds["q10"].numpy()
+
+    # weights に依存しない3シグナル (agr, spr, stg) を全 sample × horizon で事前計算
+    agr = np.zeros((n_samples, H))
+    spr = np.zeros((n_samples, H))
+    stg = np.zeros((n_samples, H))
+    pred_up_all = np.zeros((n_samples, H), dtype=bool)
+    actual_up_all = actuals[:n_samples] > 0
+    all_spreads: dict[int, np.ndarray] = {}
+
+    for h in range(H):
+        threshold = thresholds[f"horizon_{h+1}"]
+
+        # ensemble_agreement: 閾値超えモデル数の多数派比率
+        n_up = (per_model_np[:, :, h] > threshold).sum(axis=0)
+        agr[:, h] = np.maximum(n_up, n_models - n_up) / n_models
+
+        # spread_score: 自ホライゾンのスプレッド分布における percentile rank (小さいほど高)
+        spreads = q90_np[:, h] - q10_np[:, h]
+        sorted_spreads = np.sort(spreads)
+        all_spreads[h] = sorted_spreads
+        rank = np.searchsorted(sorted_spreads, spreads) / len(sorted_spreads)
+        spr[:, h] = 1.0 - rank
+
+        # signal_strength: |signal - threshold| / |threshold| を clip で正規化
+        dir_h = dir_signals_np[:, h]
+        raw = np.abs(dir_h - threshold) / max(abs(threshold), 1e-8)
+        stg[:, h] = np.minimum(raw, SIGNAL_CLIP_MAX) / SIGNAL_CLIP_MAX
+
+        pred_up_all[:, h] = dir_h > threshold
+
+    best_score = -1.0
+    best_weights = (0.34, 0.33, 0.33)
+
+    for w1_int in range(11):
+        w1 = w1_int * 0.1
+        for w2_int in range(11 - w1_int):
+            w2 = w2_int * 0.1
+            w3 = round(1.0 - w1 - w2, 2)
+            if w3 < -0.001:
+                continue
+
+            scores_all = w1 * agr + w2 * spr + w3 * stg
+
+            total_correct = 0
+            total_selected = 0
+            total_pred_up = 0
+            total_actual_up = 0
+
+            for h in range(H):
+                scores_h = scores_all[:, h]
+                cutoff = np.percentile(scores_h, (1 - CONFIDENCE_COVERAGE_TARGET) * 100)
+                selected = scores_h >= cutoff
+
+                pred_up_h = pred_up_all[:, h][selected]
+                actual_up_h = actual_up_all[:, h][selected]
+
+                total_correct += (pred_up_h == actual_up_h).sum()
+                total_selected += selected.sum()
+                total_pred_up += pred_up_h.sum()
+                total_actual_up += actual_up_h.sum()
+
+            if total_selected > 0:
+                acc = total_correct / total_selected
+                ratio_gap = abs(
+                    total_pred_up / total_selected - total_actual_up / total_selected
+                )
+                score = acc - 1.0 * ratio_gap
+                if score > best_score:
+                    best_score = score
+                    best_weights = (w1, w2, w3)
+
+    # 信頼度スコアの境界値を算出 (tune セットの 33/66 パーセンタイル)
+    w1, w2, w3 = best_weights
+    all_scores = (w1 * agr + w2 * spr + w3 * stg).flatten()
+    low_boundary = float(np.percentile(all_scores, 33))
+    high_boundary = float(np.percentile(all_scores, 66))
+
+    spread_pcts = {
+        f"horizon_{h+1}": all_spreads[h].tolist()
+        for h in range(H)
+    }
+
+    return {
+        "weights": list(best_weights),
+        "spread_percentiles": spread_pcts,
+        "confidence_boundaries": [low_boundary, high_boundary],
+        "best_coverage_score": float(best_score),
+    }
+
+
+
 def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     """テストデータでモデルを評価する。"""
     print("=== データ準備 ===")
@@ -169,7 +290,6 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
     tune_preds = ensemble_predict(models, tune_loader)
 
     thresholds = {}
-    # 全実績値を一度だけ収集
     tune_actual_all = torch.stack([
         y for (_, (y, _)) in tune_loader.dataset
     ])
@@ -180,10 +300,24 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
 
     print(f"  Thresholds: {thresholds}")
 
-    # 閾値を保存
     threshold_path = ARTIFACT_DIR / "thresholds.json"
     with open(threshold_path, "w") as f:
         json.dump(thresholds, f, indent=2)
+
+    # --- 信頼度パラメータ最適化 ---
+    print("=== 信頼度パラメータ最適化 ===")
+    n_tune_samples = tune_preds["direction_signal"].shape[0]
+    tune_actuals_np = tune_actual_all[:n_tune_samples].numpy()
+
+    confidence_params = optimize_confidence_params(
+        tune_preds, tune_actuals_np, thresholds,
+    )
+    print(f"  Best weights: {confidence_params['weights']}")
+    print(f"  Coverage score (acc - ratio_gap): {confidence_params['best_coverage_score']:.3f}")
+
+    conf_path = ARTIFACT_DIR / "confidence_params.json"
+    with open(conf_path, "w") as f:
+        json.dump(confidence_params, f, indent=2)
 
     # --- テストセットで評価 ---
     print("=== テストセット評価 ===")
@@ -195,30 +329,74 @@ def evaluate(top_k: int = TOP_K_CHECKPOINTS) -> None:
 
     report = {"thresholds": thresholds, "horizons": {}}
 
-    # 全実績値を一度だけ収集（ホライズンループの外）
     actual_all = torch.stack([
         y for (_, (y, _)) in test_loader.dataset
     ])
 
+    n_test_samples = test_preds["direction_signal"].shape[0]
+
     for h in range(PREDICTION_LENGTH):
         median_h = test_preds["median"][:, h].numpy()
         dir_signal_h = test_preds["direction_signal"][:, h].numpy()
-        actuals_h = actual_all[:len(median_h), h].numpy()
+        actuals_h = actual_all[:n_test_samples, h].numpy()
 
         mae = float(np.abs(median_h - actuals_h).mean())
         rmse = float(np.sqrt(((median_h - actuals_h) ** 2).mean()))
+
+        # ベースライン方向精度 (固定閾値)
         threshold = thresholds[f"horizon_{h+1}"]
         preds_thresholded = (dir_signal_h > threshold).astype(float)
-        dir_metrics = compute_direction_metrics(actuals_h, preds_thresholded)
+        baseline_metrics = compute_direction_metrics(actuals_h, preds_thresholded)
+
+        # 信頼度による評価
+        spread_pcts = np.array(confidence_params["spread_percentiles"][f"horizon_{h+1}"])
+        ce = ConfidenceEstimator(
+            weights=tuple(confidence_params["weights"]),
+            spread_percentiles=spread_pcts,
+            signal_clip_max=SIGNAL_CLIP_MAX,
+            confidence_boundaries=tuple(confidence_params["confidence_boundaries"]),
+        )
+
+        n_high_conf = 0
+        n_high_conf_correct = 0
+        n_not_low = 0
+        n_not_low_correct = 0
+
+        for i in range(n_test_samples):
+            per_model = test_preds["per_model_signals"][:, i, h].tolist()
+            conf_score = ce.score(
+                per_model, threshold,
+                float(test_preds["q90"][i, h]),
+                float(test_preds["q10"][i, h]),
+                float(dir_signal_h[i]),
+            )
+            conf_level = ce.classify_level(conf_score)
+            actual_up = actuals_h[i] > 0
+            pred_up = dir_signal_h[i] > threshold
+
+            if conf_level == "HIGH":
+                n_high_conf += 1
+                n_high_conf_correct += int(pred_up == actual_up)
+
+            if conf_level != "LOW":
+                n_not_low += 1
+                n_not_low_correct += int(pred_up == actual_up)
 
         report["horizons"][f"horizon_{h+1}"] = {
             "mae": mae,
             "rmse": rmse,
-            **dir_metrics,
+            **baseline_metrics,
+            "high_conf_accuracy": float(n_high_conf_correct / n_high_conf) if n_high_conf > 0 else 0.0,
+            "high_conf_count": n_high_conf,
+            "not_low_accuracy": float(n_not_low_correct / n_not_low) if n_not_low > 0 else 0.0,
+            "not_low_coverage": float(n_not_low / n_test_samples),
         }
         print(f"  Horizon {h+1}: MAE={mae:.6f}, RMSE={rmse:.6f}, "
-              f"DirAcc={dir_metrics['direction_accuracy']:.3f}, "
-              f"RatioGap={dir_metrics['direction_ratio_gap']:.3f}")
+              f"BaselineAcc={baseline_metrics['direction_accuracy']:.3f}, "
+              f"HighConfAcc={report['horizons'][f'horizon_{h+1}']['high_conf_accuracy']:.3f} "
+              f"(n={n_high_conf}), "
+              f"NotLowAcc={report['horizons'][f'horizon_{h+1}']['not_low_accuracy']:.3f} "
+              f"(coverage={report['horizons'][f'horizon_{h+1}']['not_low_coverage']:.1%})")
 
     # --- レポート保存 ---
     report_path = EVAL_DIR / "eval_report.json"
