@@ -8,7 +8,12 @@ from model.confidence import ConfidenceEstimator
 class TestEnsembleAgreement:
     def test_full_agreement_up(self):
         ce = ConfidenceEstimator()
-        signals = [0.004, 0.005, 0.003, 0.006, 0.0035]
+        signals = [0.004, 0.005, 0.0031, 0.006, 0.0035]
+        assert ce.ensemble_agreement(signals, threshold=0.003) == pytest.approx(1.0)
+
+    def test_at_threshold_counted_as_down(self):
+        ce = ConfidenceEstimator()
+        signals = [0.003, 0.003, 0.003, 0.003, 0.003]
         assert ce.ensemble_agreement(signals, threshold=0.003) == pytest.approx(1.0)
 
     def test_full_agreement_down(self):

@@ -24,7 +24,7 @@ class ConfidenceEstimator:
         self, per_model_signals: list[float], threshold: float,
     ) -> float:
         """5モデルの方向一致度を返す (0.6〜1.0)。"""
-        n_up = sum(1 for s in per_model_signals if s >= threshold)
+        n_up = sum(1 for s in per_model_signals if s > threshold)
         n_down = len(per_model_signals) - n_up
         return max(n_up, n_down) / len(per_model_signals)
 

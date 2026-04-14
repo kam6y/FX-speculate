@@ -258,7 +258,7 @@ def predict_daily() -> None:
             "q90": float(preds["q90"][0, h]),
             "threshold": threshold,
             "direction": direction,
-            "confidence_score": round(conf_score, 4),
+            "confidence_score": float(conf_score),
             "confidence_level": conf_level,
             "should_trade": int(should_trade),
         })
