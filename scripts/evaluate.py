@@ -169,12 +169,41 @@ def optimize_confidence_params(
         最適化されたパラメータ dict
     """
     n_samples = preds["direction_signal"].shape[0]
+    H = PREDICTION_LENGTH
+    per_model_np = preds["per_model_signals"].numpy()
+    n_models = per_model_np.shape[0]
+    dir_signals_np = preds["direction_signal"].numpy()
+    q90_np = preds["q90"].numpy()
+    q10_np = preds["q10"].numpy()
 
-    # スプレッドのパーセンタイル分布を各ホライゾンで算出
-    all_spreads = {}
-    for h in range(PREDICTION_LENGTH):
-        spreads = (preds["q90"][:, h] - preds["q10"][:, h]).numpy()
-        all_spreads[h] = np.sort(spreads)
+    # weights に依存しない3シグナル (agr, spr, stg) を全 sample × horizon で事前計算
+    agr = np.zeros((n_samples, H))
+    spr = np.zeros((n_samples, H))
+    stg = np.zeros((n_samples, H))
+    pred_up_all = np.zeros((n_samples, H), dtype=bool)
+    actual_up_all = actuals[:n_samples] > 0
+    all_spreads: dict[int, np.ndarray] = {}
+
+    for h in range(H):
+        threshold = thresholds[f"horizon_{h+1}"]
+
+        # ensemble_agreement: 閾値超えモデル数の多数派比率
+        n_up = (per_model_np[:, :, h] > threshold).sum(axis=0)
+        agr[:, h] = np.maximum(n_up, n_models - n_up) / n_models
+
+        # spread_score: 自ホライゾンのスプレッド分布における percentile rank (小さいほど高)
+        spreads = q90_np[:, h] - q10_np[:, h]
+        sorted_spreads = np.sort(spreads)
+        all_spreads[h] = sorted_spreads
+        rank = np.searchsorted(sorted_spreads, spreads) / len(sorted_spreads)
+        spr[:, h] = 1.0 - rank
+
+        # signal_strength: |signal - threshold| / |threshold| を clip で正規化
+        dir_h = dir_signals_np[:, h]
+        raw = np.abs(dir_h - threshold) / max(abs(threshold), 1e-8)
+        stg[:, h] = np.minimum(raw, SIGNAL_CLIP_MAX) / SIGNAL_CLIP_MAX
+
+        pred_up_all[:, h] = dir_h > threshold
 
     best_score = -1.0
     best_weights = (0.34, 0.33, 0.33)
@@ -187,46 +216,25 @@ def optimize_confidence_params(
             if w3 < -0.001:
                 continue
 
+            scores_all = w1 * agr + w2 * spr + w3 * stg
+
             total_correct = 0
             total_selected = 0
             total_pred_up = 0
             total_actual_up = 0
 
-            for h in range(PREDICTION_LENGTH):
-                threshold = thresholds[f"horizon_{h+1}"]
-                actuals_h = actuals[:n_samples, h]
-                actual_up = actuals_h > 0
+            for h in range(H):
+                scores_h = scores_all[:, h]
+                cutoff = np.percentile(scores_h, (1 - CONFIDENCE_COVERAGE_TARGET) * 100)
+                selected = scores_h >= cutoff
 
-                ce = ConfidenceEstimator(
-                    weights=(w1, w2, w3),
-                    spread_percentiles=all_spreads[h],
-                    signal_clip_max=SIGNAL_CLIP_MAX,
-                )
+                pred_up_h = pred_up_all[:, h][selected]
+                actual_up_h = actual_up_all[:, h][selected]
 
-                scores = []
-                for i in range(n_samples):
-                    per_model = preds["per_model_signals"][:, i, h].tolist()
-                    s = ce.score(
-                        per_model_signals=per_model,
-                        threshold=threshold,
-                        q90=float(preds["q90"][i, h]),
-                        q10=float(preds["q10"][i, h]),
-                        direction_signal=float(preds["direction_signal"][i, h]),
-                    )
-                    scores.append(s)
-
-                scores = np.array(scores)
-                cutoff = np.percentile(scores, (1 - CONFIDENCE_COVERAGE_TARGET) * 100)
-                selected = scores >= cutoff
-
-                dir_signals = preds["direction_signal"][:, h].numpy()
-                pred_up = dir_signals > threshold
-                correct = pred_up[selected] == actual_up[selected]
-
-                total_correct += correct.sum()
+                total_correct += (pred_up_h == actual_up_h).sum()
                 total_selected += selected.sum()
-                total_pred_up += pred_up[selected].sum()
-                total_actual_up += actual_up[selected].sum()
+                total_pred_up += pred_up_h.sum()
+                total_actual_up += actual_up_h.sum()
 
             if total_selected > 0:
                 acc = total_correct / total_selected
@@ -239,33 +247,14 @@ def optimize_confidence_params(
                     best_weights = (w1, w2, w3)
 
     # 信頼度スコアの境界値を算出 (tune セットの 33/66 パーセンタイル)
-    all_scores = []
-    for h in range(PREDICTION_LENGTH):
-        threshold = thresholds[f"horizon_{h+1}"]
-        ce = ConfidenceEstimator(
-            weights=best_weights,
-            spread_percentiles=all_spreads[h],
-            signal_clip_max=SIGNAL_CLIP_MAX,
-        )
-        for i in range(n_samples):
-            per_model = preds["per_model_signals"][:, i, h].tolist()
-            s = ce.score(
-                per_model_signals=per_model,
-                threshold=threshold,
-                q90=float(preds["q90"][i, h]),
-                q10=float(preds["q10"][i, h]),
-                direction_signal=float(preds["direction_signal"][i, h]),
-            )
-            all_scores.append(s)
-
-    all_scores = np.array(all_scores)
+    w1, w2, w3 = best_weights
+    all_scores = (w1 * agr + w2 * spr + w3 * stg).flatten()
     low_boundary = float(np.percentile(all_scores, 33))
     high_boundary = float(np.percentile(all_scores, 66))
 
-    # スプレッドパーセンタイルを JSON 用にリスト化
     spread_pcts = {
         f"horizon_{h+1}": all_spreads[h].tolist()
-        for h in range(PREDICTION_LENGTH)
+        for h in range(H)
     }
 
     return {
